@@ -32,8 +32,15 @@
     "files": [
       "dist/**",
       "app-renderer/**",
+      "backend-bin/**",
       "assets/**",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend-bin",
+        "to": "backend-bin"
+      }
     ],
     "win": {
       "target": [

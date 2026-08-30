@@ -10,5 +10,9 @@ declare global {
         node: string;
       };
     };
+    backend?: {
+      request: (method: string, path: string, body?: unknown) => Promise<unknown>;
+      status: () => Promise<{ running: boolean; version: string | null; url: string; restartCount: number }>;
+    };
   }
 }
