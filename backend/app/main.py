@@ -11,6 +11,7 @@ from .config import settings
 from .models.database import init_db
 from .services.logger import get_app_logger
 from .services.scheduler import start_scheduler, stop_scheduler
+from .services.portfolio_sync import sync_now, portfolio_status, register_hourly_sync
 from .data_sources.market.data_fusion import data_fusion
 
 logger = get_app_logger()
@@ -20,6 +21,7 @@ logger = get_app_logger()
 async def lifespan(_app: FastAPI):
     init_db()
     start_scheduler()
+    register_hourly_sync()
     logger.info("数据库初始化完成: %s", settings.db_path)
     yield
     stop_scheduler()
@@ -74,3 +76,49 @@ def market_kline(
     if bars is None:
         raise HTTPException(status_code=404, detail="K线获取失败（数据源不可用）")
     return {"symbol": symbol.strip(), "market": market, "bars": [asdict(b) for b in bars]}
+
+
+@app.get("/api/portfolio/status")
+def portfolio_status_api(x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    return portfolio_status()
+
+
+@app.post("/api/portfolio/sync")
+def portfolio_sync_api(x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    return sync_now()
+
+
+@app.get("/api/portfolio/overview")
+def portfolio_overview_api(x_backend_token: str = Header(default="")):
+    """持仓总览：本地 holdings 明细 + 理财软件快照（账户/净值）"""
+    require_token(x_backend_token)
+    conn = None
+    try:
+        from .models.database import get_connection
+        conn = get_connection()
+        holdings = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT symbol, name, market, currency, quantity, cost_price, current_price, source, sync_at FROM holdings ORDER BY source, market"
+            )
+        ]
+    finally:
+        if conn:
+            conn.close()
+    from .models.database import get_connection as _gc
+    _conn = _gc()
+    try:
+        row = _conn.execute(
+            "SELECT value FROM system_settings WHERE key = 'portfolio_snapshot_v1'"
+        ).fetchone()
+    finally:
+        _conn.close()
+    import json as _json
+    snapshot = _json.loads(row['value']) if row else None
+    return {
+        "holdings": holdings,
+        "snapshot": snapshot,
+        "status": portfolio_status(),
+    }
