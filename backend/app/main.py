@@ -78,6 +78,80 @@ def market_kline(
     return {"symbol": symbol.strip(), "market": market, "bars": [asdict(b) for b in bars]}
 
 
+# ---------------- 用户画像与系统设置（S7） ----------------
+
+from typing import Any  # noqa: E402
+
+from pydantic import BaseModel  # noqa: E402
+
+from .services.profile_service import get_profile, save_profile  # noqa: E402
+from .services.settings_service import (  # noqa: E402
+    get_all_settings,
+    save_settings,
+    save_ai_key,
+    ai_key_configured,
+)
+from .services.llm_client import test_connection  # noqa: E402
+
+
+class ProfileIn(BaseModel):
+    risk_tolerance: str = '稳健型'
+    invest_amount: str = '10-50万'
+    markets: list[str] = ['A股', '港股']
+    holding_period: str = '数天~数周'
+    experience: str = '有经验'
+
+
+class SettingsIn(BaseModel):
+    markets: list[str] | None = None
+    notifications: dict[str, Any] | None = None
+    quiet_hours: dict[str, Any] | None = None
+
+
+class AiKeyIn(BaseModel):
+    api_key: str
+
+
+@app.get("/api/profile")
+def profile_get(x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    return get_profile()
+
+
+@app.put("/api/profile")
+def profile_put(data: ProfileIn, x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    return save_profile(data.model_dump())
+
+
+@app.get("/api/settings")
+def settings_get(x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    result = get_all_settings()
+    result['ai_configured'] = ai_key_configured()
+    return result
+
+
+@app.put("/api/settings")
+def settings_put(data: SettingsIn, x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    body = {k: v for k, v in data.model_dump().items() if v is not None}
+    return save_settings(body)
+
+
+@app.post("/api/settings/ai-key")
+def ai_key_save(data: AiKeyIn, x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    return save_ai_key(data.api_key)
+
+
+@app.post("/api/settings/ai-test")
+def ai_key_test(data: AiKeyIn | None = None, x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    key = data.api_key if data else None
+    return test_connection(key)
+
+
 @app.get("/api/portfolio/status")
 def portfolio_status_api(x_backend_token: str = Header(default="")):
     require_token(x_backend_token)

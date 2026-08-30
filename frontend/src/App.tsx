@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import AppLayout from './layouts/AppLayout';
+import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import News from './pages/News';
 import Portfolio from './pages/Portfolio';
@@ -11,8 +13,26 @@ import Risk from './pages/Risk';
 import Review from './pages/Review';
 import Chat from './pages/Chat';
 import Settings from './pages/Settings';
+import { getProfile } from './services/api';
 
 export default function App() {
+  const [onboarded, setOnboarded] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    getProfile().then((res) => {
+      const data = res.data as { onboarded?: number } | undefined;
+      setOnboarded(!!data && data.onboarded === 1);
+    }).catch(() => setOnboarded(true)); // 后端不可用时直接进入主界面
+  }, []);
+
+  if (onboarded === null) {
+    return <div className="min-h-screen bg-primary-50 flex items-center justify-center text-text-secondary">加载中...</div>;
+  }
+
+  if (!onboarded) {
+    return <Onboarding onDone={() => setOnboarded(true)} />;
+  }
+
   return (
     <HashRouter>
       <Routes>

@@ -26,3 +26,27 @@ export async function getBackendStatus() {
   if (window.backend) return window.backend.status();
   return { running: false, version: null, url: '', restartCount: 0 };
 }
+
+// ---- 画像 ----
+export interface Profile {
+  risk_tolerance: string;
+  invest_amount: string;
+  markets: string[];
+  holding_period: string;
+  experience: string;
+  onboarded: number;
+}
+export const getProfile = () => api<Profile>('GET', '/api/profile');
+export const saveProfile = (p: Partial<Profile>) => api<Profile>('PUT', '/api/profile', p);
+
+// ---- 设置 ----
+export interface Settings {
+  markets: string[];
+  notifications: Record<string, boolean>;
+  quiet_hours: { enabled: boolean; start: string; end: string; urgent_exempt: boolean };
+  ai_configured: boolean;
+}
+export const getSettings = () => api<Settings>('GET', '/api/settings');
+export const saveSettings = (s: Partial<Settings>) => api<Settings>('PUT', '/api/settings', s);
+export const saveAiKey = (key: string) => api('POST', '/api/settings/ai-key', { api_key: key });
+export const testAiKey = (key?: string) => api<{ ok: boolean; models?: string[]; error?: string }>('POST', '/api/settings/ai-test', key ? { api_key: key } : {});
