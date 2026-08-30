@@ -30,9 +30,22 @@
 
 （待补充）
 
-## 快速开始
+## 快速开始（开发模式）
 
-（待 S1 起逐步补充）
+桌面壳（desktop/）：
+
+- 安装依赖：cd desktop && npm install
+- 开发运行：cd desktop && npm run start（构建 TS 后启动 Electron）
+- 打包安装包：cd desktop && npm run dist（输出到 desktop/release/）
+
+> 说明：S1 已打通 Electron 壳与 NSIS 安装包链路；完整前端界面（React）自 S2 接入。
+
+## 开发进度
+
+| 版本 | 进度 |
+|------|------|
+| v0.1.1 | Electron 壳最小化：窗口 / 托盘 / 单实例 / 图标 / 打包链路 ✅ |
+| v0.1.0 | 项目初始化：文档体系 + GitHub 建仓 ✅ |
 
 ## 文档
 

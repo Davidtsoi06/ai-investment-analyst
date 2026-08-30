@@ -1,0 +1,56 @@
+{
+  "name": "ai-investment-analyst",
+  "productName": "AI投资分析软件",
+  "version": "0.1.1",
+  "description": "面向个人及家庭的 AI 驱动投资分析工具",
+  "main": "dist/main/index.js",
+  "author": "Davidtsoi06",
+  "license": "MIT",
+  "scripts": {
+    "icon": "node scripts/generate-icon.mjs",
+    "build": "tsc",
+    "start": "npm run build && electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "electron": "^40.0.0",
+    "electron-builder": "^26.0.0",
+    "typescript": "^5.8.0"
+  },
+  "build": {
+    "npmRebuild": false,
+    "appId": "com.davidtsoi.aiinvestmentanalyst",
+    "productName": "AI投资分析软件",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "renderer/**",
+      "assets/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "AI投资分析软件"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Davidtsoi06",
+      "repo": "ai-investment-analyst"
+    }
+  }
+}

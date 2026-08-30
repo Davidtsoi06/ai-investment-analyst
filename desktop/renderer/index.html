@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>AI 投资分析软件</title>
+  <style>
+    body { margin: 0; font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif; background: #F5F7FA; color: #1F2937; display: flex; align-items: center; justify-content: center; height: 100vh; }
+    .card { background: #FFFFFF; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 48px 64px; text-align: center; }
+    h1 { color: #1F5A9A; font-size: 24px; margin: 0 0 8px; }
+    .badge { display: inline-block; background: #EBF3FB; color: #3A7CC3; border-radius: 4px; padding: 4px 12px; font-size: 13px; margin-bottom: 16px; }
+    .info { color: #6B7280; font-size: 14px; line-height: 1.8; }
+    .note { color: #9CA3AF; font-size: 12px; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>📈 AI 投资分析软件</h1>
+    <div class="badge" id="version">v0.1.1</div>
+    <div class="info">S1 Electron 壳骨架页<br/>主进程 · 托盘 · 窗口已就绪</div>
+    <div class="note" id="runtime"></div>
+  </div>
+  <script>
+    const info = window.appInfo ? window.appInfo.versions : null;
+    if (info) {
+      document.getElementById('version').textContent = 'v' + (info.app || '0.1.1');
+      document.getElementById('runtime').textContent = 'Electron ' + info.electron + ' · Chrome ' + info.chrome + ' · Node ' + info.node;
+    }
+  </script>
+</body>
+</html>

@@ -28,6 +28,7 @@ venv/
 
 # 临时与日志
 .tmp/
+.cache/
 *.log
 
 # IDE 与系统
