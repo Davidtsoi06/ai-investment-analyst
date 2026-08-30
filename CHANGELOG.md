@@ -2,6 +2,17 @@
 
 本项目的所有重要变更均记录在此文件，格式基于 Keep a Changelog，版本号遵循语义化版本（SemVer）。
 
+## [0.1.2] - 2026-08-30
+
+### Added
+
+- 前端骨架（S2）：Vite 8 + React 19 + TypeScript + Tailwind 4，淡蓝色系设计 token（与理财软件风格统一）
+- 11 个页面占位（仪表盘/资讯/持仓/推荐/追踪/自选股/报告/风险/复盘/问答/设置），220px 侧边导航布局
+- 公共 UI 组件：Card / Button / Badge / Table / Amount
+- 前端产物接入 Electron（app-renderer 打包机制）
+- 后端骨架（S3）：FastAPI + SQLite（14 张核心表 + 迁移表）+ 健康检查 /api/health + 三类日志
+- 发布流程新规则：版本推送前必须经用户明确确认（写入版本发布规范）
+
 ## [0.1.1] - 2026-08-30
 
 ### Added
