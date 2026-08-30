@@ -8,7 +8,7 @@
   "license": "MIT",
   "scripts": {
     "icon": "node scripts/generate-icon.mjs",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-frontend.mjs",
     "start": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder --win nsis"
@@ -31,7 +31,7 @@
     },
     "files": [
       "dist/**",
-      "renderer/**",
+      "app-renderer/**",
       "assets/**",
       "package.json"
     ],

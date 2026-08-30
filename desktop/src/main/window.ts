@@ -18,7 +18,7 @@ export function createWindow(): BrowserWindow {
     },
   });
 
-  // S1：加载内置最小页面；S2 起改为加载 frontend 构建产物
-  win.loadFile(path.join(__dirname, '../../renderer/index.html'));
+  // 加载前端构建产物（构建脚本将 frontend/dist 复制到 app-renderer/）
+  win.loadFile(path.join(__dirname, '../../app-renderer/index.html'));
   return win;
 }

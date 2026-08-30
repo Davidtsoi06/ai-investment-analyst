@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+@theme {
+  /* 淡蓝色系设计 token（与需求文档十一章一致，对齐理财软件风格） */
+  --color-primary-50: #EBF3FB;
+  --color-primary-100: #D6E7F7;
+  --color-primary-300: #8BBDE4;
+  --color-primary-500: #5B9BD5;
+  --color-primary-700: #3A7CC3;
+  --color-primary-900: #1F5A9A;
+  --color-success: #52C41A;
+  --color-danger: #FF4D4F;
+  --color-warning: #FAAD14;
+  --color-info: #1890FF;
+  --color-bg: #F5F7FA;
+  --color-bg-secondary: #FAFBFC;
+  --color-surface: #FFFFFF;
+  --color-border: #E4E7ED;
+  --color-text: #1F2937;
+  --color-text-secondary: #6B7280;
+  --color-text-muted: #9CA3AF;
+  --font-number: "Consolas", "Menlo", monospace;
+}
+
+body {
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  margin: 0;
+}

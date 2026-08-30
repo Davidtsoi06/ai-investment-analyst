@@ -29,6 +29,9 @@ venv/
 # 临时与日志
 .tmp/
 .cache/
+
+# 前端产物副本（由构建脚本生成）
+desktop/app-renderer/
 *.log
 
 # IDE 与系统
