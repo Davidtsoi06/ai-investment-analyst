@@ -2,6 +2,17 @@
 
 本项目的所有重要变更均记录在此文件，格式基于 Keep a Changelog，版本号遵循语义化版本（SemVer）。
 
+## [0.2.0] - 2026-08-30
+
+### Added
+
+- P0 收官：前后端联通（S4）——Electron 拉起/停止 Python 后端（开发 venv / 生产 exe），崩溃自动重启（2 秒延迟，每小时限 5 次），健康轮询 30 秒
+- 后端令牌安全校验（X-Backend-Token），渲染进程经主进程 IPC 代理访问后端
+- PyInstaller 打包后端为单文件 exe（约 12MB）并内置进安装包（extraResources）
+- 数据目录规范：打包环境使用 %APPDATA%/ai-investment-analyst（不再丢失数据库）
+- 设置页新增后端服务状态检测（运行中/版本/测试连接）
+- 行情依赖接入（akshare / baostock / yfinance / apscheduler，S5 前置）
+
 ## [0.1.2] - 2026-08-30
 
 ### Added

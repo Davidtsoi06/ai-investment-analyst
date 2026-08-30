@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = 'AI 投资分析软件'
-    version: str = '0.1.2'
+    version: str = '0.2.0'
     host: str = '127.0.0.1'
     port: int = 8756
 
