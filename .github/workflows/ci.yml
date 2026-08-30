@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  docs-check:
+    name: 文档完整性检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 验证核心文档存在
+        run: |
+          test -f README.md
+          test -f CHANGELOG.md
+          test -f CLAUDE.md
+          test -f docs/需求文档V1.md
+          test -f docs/开发执行计划.md
+          echo "核心文档检查通过"

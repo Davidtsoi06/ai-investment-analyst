@@ -1,0 +1,37 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+release/
+build/
+out/
+*.exe
+*.msi
+
+# 环境与密钥（绝不入库）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# 本地数据（数据库/缓存/日志/备份）
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 临时与日志
+.tmp/
+*.log
+
+# IDE 与系统
+.idea/
+*.suo
+.DS_Store
+Thumbs.db
