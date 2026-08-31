@@ -1,5 +1,111 @@
-import PagePlaceholder from '../components/PagePlaceholder';
+import { useEffect, useState } from 'react';
+import Card from '../components/ui/Card';
+import Badge from '../components/ui/Badge';
+import Button from '../components/ui/Button';
+import { api } from '../services/api';
+
+interface NewsItem {
+  id: number;
+  title: string;
+  url: string;
+  source: string;
+  market: string;
+  summary: string;
+  level: string;
+  published_at: string;
+  holding_related?: boolean;
+}
+
+interface Premarket {
+  date?: string;
+  content?: string;
+  fetched?: number;
+  saved?: number;
+  pushed?: boolean;
+  created_at?: string;
+}
+
+const LEVEL_BADGE: Record<string, 'danger' | 'warning' | 'default'> = {
+  '重大': 'danger',
+  '中等': 'warning',
+  '一般': 'default',
+};
 
 export default function News() {
-  return <PagePlaceholder title="资讯看板" description="每日盘前资讯聚合推送，AI 分级摘要，持仓关联高亮。" features={['08:00 抓取整合 · 09:00 推送（交易日）', '重大/中等/一般三级分类', '持仓相关资讯置顶 + 跨市场联动标注']} />;
+  const [premarket, setPremarket] = useState<Premarket | null>(null);
+  const [items, setItems] = useState<NewsItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  const load = async () => {
+    const [p, l] = await Promise.all([
+      api<Premarket>('GET', '/api/news/premarket/today'),
+      api<NewsItem[]>('GET', '/api/news/latest?limit=30'),
+    ]);
+    if (p.ok) setPremarket(p.data as Premarket);
+    if (l.ok) setItems((l.data as NewsItem[]) || []);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const refresh = async () => {
+    setLoading(true);
+    setMsg('抓取整合中...');
+    const r = await api<{ ok: boolean; fetched?: number; saved?: number }>('POST', '/api/news/premarket/run');
+    if (r.ok && r.data?.ok) setMsg(`整合完成：抓取 ${r.data.fetched} 条 / 新增 ${r.data.saved} 条`);
+    else setMsg(`失败：${(r.data as { reason?: string })?.reason || r.error}`);
+    await load();
+    setLoading(false);
+    setTimeout(() => setMsg(''), 4000);
+  };
+
+  const renderPremarket = (content: string) =>
+    content.split('\n').map((line, i) => {
+      let cls = 'text-text-secondary';
+      if (line.startsWith('📰') || line.includes('━━')) cls = 'font-bold text-primary-900';
+      else if (line.startsWith('🔴')) cls = 'text-danger';
+      else if (line.startsWith('🟡')) cls = 'text-warning';
+      else if (line.startsWith('🟢')) cls = 'text-success';
+      return <p key={i} className={`text-sm leading-6 ${cls}`}>{line}</p>;
+    });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-bold text-primary-900">资讯看板</h1>
+          {premarket?.pushed && <Badge variant="success">已推送</Badge>}
+        </div>
+        <Button size="sm" onClick={refresh} disabled={loading}>{loading ? '整合中...' : '抓取最新资讯'}</Button>
+      </div>
+      {msg && <p className="text-sm text-text-secondary">{msg}</p>}
+
+      <Card>
+        <div className="flex items-center gap-2 mb-3">
+          <h2 className="font-bold text-sm">今日盘前资讯</h2>
+          {premarket?.date && <span className="text-xs text-text-muted">{premarket.date}{premarket.fetched ? ` · 抓取 ${premarket.fetched} 条` : ''}</span>}
+        </div>
+        {premarket?.content ? renderPremarket(premarket.content) : <p className="text-sm text-text-muted">今日尚无盘前资讯，点击右上角抓取。</p>}
+      </Card>
+
+      <Card>
+        <h2 className="font-bold text-sm mb-3">最新资讯（AI 分级）</h2>
+        {items.length === 0 && <p className="text-sm text-text-muted">暂无资讯</p>}
+        <div className="divide-y divide-border">
+          {items.map((it) => (
+            <div key={it.id} className="py-2.5">
+              <div className="flex items-center gap-2">
+                <Badge variant={LEVEL_BADGE[it.level] || 'default'}>{it.level}</Badge>
+                <span className="text-xs text-text-muted">{it.market}</span>
+                {it.holding_related && <Badge variant="info">持仓相关 ★</Badge>}
+                <span className="text-xs text-text-muted ml-auto">{it.published_at}</span>
+              </div>
+              <a href={it.url} target="_blank" rel="noreferrer" className="block text-sm font-medium text-text mt-1 hover:text-primary-700">{it.title}</a>
+              <p className="text-xs text-text-secondary mt-0.5 line-clamp-2">{it.summary}</p>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
 }

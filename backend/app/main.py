@@ -12,6 +12,10 @@ from .models.database import init_db
 from .services.logger import get_app_logger
 from .services.scheduler import start_scheduler, stop_scheduler
 from .services.portfolio_sync import sync_now, portfolio_status, register_hourly_sync
+from .services.notification import send_notification, list_notifications
+from .services.settings_service import get_setting, set_setting
+from .services.trading_calendar import is_trading_day
+from .agents.news_agent import collect_and_analyze, build_premarket_content
 from .data_sources.market.data_fusion import data_fusion
 
 logger = get_app_logger()
@@ -22,6 +26,7 @@ async def lifespan(_app: FastAPI):
     init_db()
     start_scheduler()
     register_hourly_sync()
+    register_news_jobs()
     logger.info("数据库初始化完成: %s", settings.db_path)
     yield
     stop_scheduler()
@@ -150,6 +155,114 @@ def ai_key_test(data: AiKeyIn | None = None, x_backend_token: str = Header(defau
     require_token(x_backend_token)
     key = data.api_key if data else None
     return test_connection(key)
+
+
+# ---------------- 资讯与通知（S8） ----------------
+
+from datetime import date, datetime as _dt  # noqa: E402
+
+from .models.database import get_connection  # noqa: E402
+
+PREMARKET_KEY = 'premarket_today'
+
+
+def _run_premarket() -> dict:
+    """抓取整合资讯并生成盘前内容（供 08:00 定时与手动触发）"""
+    result = collect_and_analyze()
+    if not result.get('ok'):
+        return result
+    content = build_premarket_content(result['items'])
+    set_setting(PREMARKET_KEY, {
+        'date': date.today().isoformat(),
+        'content': content,
+        'fetched': result.get('fetched'),
+        'saved': result.get('saved'),
+        'created_at': _dt.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'pushed': False,
+    })
+    result['content'] = content
+    return result
+
+
+def _push_premarket() -> dict:
+    """推送今日盘前资讯（09:00 定时；当日不重复）"""
+    today = date.today().isoformat()
+    pm = get_setting(PREMARKET_KEY) or {}
+    if pm.get('date') != today:
+        _run_premarket()
+        pm = get_setting(PREMARKET_KEY) or {}
+    if pm.get('pushed'):
+        return {'sent': False, 'reason': '今日已推送'}
+    content = pm.get('content', '今日暂无资讯')
+    r = send_notification('premarket', '📰 盘前资讯速递', content, level='提示', force=True)
+    if r.get('sent'):
+        pm['pushed'] = True
+        set_setting(PREMARKET_KEY, pm)
+    return {'sent': r.get('sent'), 'reason': r.get('reason', '')}
+
+
+def register_news_jobs() -> None:
+    """注册盘前资讯定时任务（仅交易日）"""
+    from .services.scheduler import add_cron_job
+
+    def _collect_job() -> None:
+        if not is_trading_day('A股'):
+            return
+        try:
+            _run_premarket()
+        except Exception as e:  # noqa: BLE001
+            logger.error('盘前抓取失败: %s', e)
+
+    def _push_job() -> None:
+        if not is_trading_day('A股'):
+            return
+        try:
+            _push_premarket()
+        except Exception as e:  # noqa: BLE001
+            logger.error('盘前推送失败: %s', e)
+
+    add_cron_job(_collect_job, hour=8, minute=0, job_id='news_premarket_collect')
+    add_cron_job(_push_job, hour=9, minute=0, job_id='news_premarket_push')
+    logger.info('盘前资讯定时任务已注册（08:00 抓取 / 09:00 推送，仅交易日）')
+
+
+@app.get("/api/news/latest")
+def news_latest(limit: int = 30, x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, title, url, source, market, summary, level, published_at, created_at "
+            "FROM news_cache ORDER BY id DESC LIMIT ?",
+            (min(limit, 100),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@app.post("/api/news/premarket/run")
+def news_premarket_run(x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    return _run_premarket()
+
+
+@app.get("/api/news/premarket/today")
+def news_premarket_today(x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    return get_setting(PREMARKET_KEY) or {'date': None, 'content': '今日尚无盘前资讯'}
+
+
+@app.post("/api/news/premarket/push")
+def news_premarket_push(x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    return _push_premarket()
+
+
+@app.get("/api/notifications")
+def notifications_get(limit: int = 30, x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    return list_notifications(limit)
 
 
 @app.get("/api/portfolio/status")
