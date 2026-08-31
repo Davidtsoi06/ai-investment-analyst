@@ -23,7 +23,7 @@ export default function AppLayout() {
           <span className="text-xl">📈</span>
           <div>
             <div className="font-bold text-sm">AI 投资分析</div>
-            <div className="text-xs opacity-70">v0.3.0</div>
+            <div className="text-xs opacity-70">v0.4.0</div>
           </div>
         </div>
         <nav className="flex-1 overflow-y-auto py-2">
