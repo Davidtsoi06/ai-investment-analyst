@@ -630,6 +630,7 @@ from .agents.summary_agent import (  # noqa: E402
     get_today_summary as _sum_today,
     list_summaries as _sum_history,
     register_summary_jobs,
+    today_reports as _sum_today_all,
 )
 from .data_sources.market.snapshot_client import collect_snapshot  # noqa: E402
 
@@ -639,23 +640,43 @@ class SummaryRunIn(BaseModel):
     force: bool = False
 
 
-@app.get("/api/summary/today")
-def summary_today(
-    market: str = Query('A股', description='A股/港股/合并'),
+@app.post("/api/summary/generate")
+def summary_generate(
+    market: str = Query('A股', description='A股/港股'),
     x_backend_token: str = Header(default=""),
 ):
-    """当日盘后报告（已生成返回；未生成 exists=false，不自动触发 AI 调用）"""
+    """生成单市场盘后总结（契约主入口）：当日同市场已生成返回 existing=true 幂等。
+    返回 {ok, existing, market, report, error?}"""
     require_token(x_backend_token)
-    report = _sum_today(market)
-    if report is None:
-        return {'exists': False, 'market': market, 'report': None,
-                'reason': '当日报告尚未生成（可调用 POST /api/summary/run 生成）'}
-    return {'exists': True, 'market': market, 'report': report}
+    result = _sum_generate((market or 'A股').strip(), force=False)
+    if not result.get('ok'):
+        return {'ok': False, 'existing': False, 'market': market,
+                'report': None, 'error': result.get('reason', '生成失败')}
+    return {'ok': True, 'existing': bool(result.get('cached')), 'market': market,
+            'report': result.get('report'), 'error': None}
+
+
+@app.get("/api/summary/today")
+def summary_today(
+    market: str | None = Query(None, description='A股/港股/合并（缺省返回今日全部市场列表）'),
+    x_backend_token: str = Header(default=""),
+):
+    """当日盘后报告：
+    - 无 market 参数：今日全部市场报告数组（缺失且交易日自动触发生成，兼容前端契约）
+    - 带 market 参数：单市场报告（未生成 exists=false，不自动触发）"""
+    require_token(x_backend_token)
+    if market:
+        report = _sum_today(market)
+        if report is None:
+            return {'exists': False, 'market': market, 'report': None,
+                    'reason': '当日报告尚未生成（可调用 POST /api/summary/generate 生成）'}
+        return {'exists': True, 'market': market, 'report': report}
+    return _sum_today_all(auto_generate=True)
 
 
 @app.post("/api/summary/run")
 def summary_run(data: SummaryRunIn, x_backend_token: str = Header(default="")):
-    """生成盘后总结：market=A股/港股/合并；force=true 强制重新生成"""
+    """生成盘后总结（调试/强制入口）：market=A股/港股/合并；force=true 强制重新生成"""
     require_token(x_backend_token)
     market = (data.market or 'A股').strip()
     if market == '合并':
@@ -663,11 +684,25 @@ def summary_run(data: SummaryRunIn, x_backend_token: str = Header(default="")):
     return _sum_generate(market, force=data.force)
 
 
+@app.post("/api/summary/daily")
+def summary_daily(x_backend_token: str = Header(default="")):
+    """合并生成全市场日报（契约主入口）：当日 A股+港股 报告拼接 + 通知推送。
+    返回 {ok, existing, report, sent, reason?}"""
+    require_token(x_backend_token)
+    result = _sum_combined(force=False)
+    if not result.get('ok'):
+        return {'ok': False, 'existing': False, 'report': None,
+                'sent': False, 'reason': result.get('reason', '合并日报生成失败')}
+    return {'ok': True, 'existing': bool(result.get('cached')),
+            'report': result.get('report'), 'sent': True,
+            'reason': '已推送应用内通知' if not result.get('cached') else '今日已生成（生成时已推送）'}
+
+
 @app.get("/api/summary/history")
 def summary_history(limit: int = Query(30, ge=1, le=200), x_backend_token: str = Header(default="")):
-    """盘后报告历史（按日期倒序）"""
+    """盘后报告历史（按日期倒序，直接返回数组，兼容前端契约）"""
     require_token(x_backend_token)
-    return {'items': _sum_history(limit)}
+    return _sum_history(limit)
 
 
 @app.get("/api/summary/latest")

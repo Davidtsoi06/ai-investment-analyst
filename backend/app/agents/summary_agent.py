@@ -31,6 +31,9 @@ REPORT_MARKETS = ('A股', '港股')
 COMBINED = '合并'
 DISCLAIMER = '⚠️ 本报告由 AI 自动生成，仅供参考，不构成投资建议。'
 
+# 生成中标记（前端轮询/重复触发时防并发重复生成）
+_running: dict[str, bool] = {}
+
 
 def _local_today() -> str:
     """北京时间当日日期"""
@@ -436,10 +439,8 @@ SUMMARY_COLS = ('id', 'trade_date', 'market', 'report_type', 'title', 'content',
 
 def _row_to_report(row) -> dict:
     r = dict(row)
-    try:
-        r['suggestions'] = json.loads(r['suggestions']) if r.get('suggestions') else []
-    except (ValueError, TypeError):
-        r['suggestions'] = []
+    # suggestions 保持原始 JSON 字符串（前端契约：字符串形式，可自行解析）
+    r['suggestions'] = r.get('suggestions') or ''
     try:
         r['snapshot'] = json.loads(r['snapshot_json']) if r.get('snapshot_json') else None
     except (ValueError, TypeError):
@@ -473,6 +474,30 @@ def list_summaries(limit: int = 30) -> list[dict]:
         return [_row_to_report(r) for r in rows]
     finally:
         conn.close()
+
+
+def today_reports(auto_generate: bool = True) -> list[dict]:
+    """今日全部报告（A股/港股/合并日报）。auto_generate=True 时缺失市场自动补生成
+    （仅画像开启 + 交易日；生成失败不影响其余市场返回）。"""
+    from ..services.settings_service import get_all_settings
+    from ..services.trading_calendar import is_trading_day
+
+    today = _local_today()
+    markets = [m for m in (get_all_settings().get('markets') or []) if m in REPORT_MARKETS]
+    result: list[dict] = []
+    for m in REPORT_MARKETS:
+        r = get_today_summary(m)
+        if r is None and auto_generate and m in markets and is_trading_day(m):
+            try:
+                r = generate_market_summary(m, force=False).get('report')
+            except Exception as e:  # noqa: BLE001
+                logger.warning('today_reports 自动生成 %s 失败: %s', m, str(e)[:100])
+        if r:
+            result.append(r)
+    c = get_today_summary(COMBINED)
+    if c:
+        result.append(c)
+    return result
 
 
 def get_latest_report() -> dict | None:
@@ -534,29 +559,37 @@ def generate_market_summary(market: str = 'A股', force: bool = False) -> dict:
     """生成单市场盘后总结（A股/港股）。force=False 且当日已生成时返回缓存。"""
     if market not in REPORT_MARKETS:
         return {'ok': False, 'reason': f'market 参数错误: {market}（仅支持 A股/港股）'}
+    if _running.get(market):
+        return {'ok': False, 'reason': f'{market} 报告正在生成中，请稍候', 'generating': True,
+                'date': _local_today(), 'market': market, 'cached': False,
+                'report': None, 'errors': []}
     trade_date = _local_today()
     existing = get_today_summary(market)
     if existing and not force:
         return {'ok': True, 'date': trade_date, 'market': market, 'cached': True,
                 'report': existing, 'errors': []}
 
-    snapshot = collect_snapshot(market)
-    review = build_review([market])
+    _running[market] = True
+    try:
+        snapshot = collect_snapshot(market)
+        review = build_review([market])
 
-    prediction = _ai_predict(market, trade_date, snapshot, review)
-    ai_used = prediction is not None
-    if prediction is None:
-        prediction = _rule_predict(market, trade_date, snapshot, review)
+        prediction = _ai_predict(market, trade_date, snapshot, review)
+        ai_used = prediction is not None
+        if prediction is None:
+            prediction = _rule_predict(market, trade_date, snapshot, review)
 
-    title = f'📊 {trade_date} {"A股" if market == "A股" else "港股"}盘后总结'
-    content = build_report(market, trade_date, snapshot, review, prediction, ai_used)
-    report_id = _save_summary(market, trade_date, title, content,
-                              prediction.get('suggestions') or [], snapshot, ai_used)
-    _persist_sentiment(market, trade_date, snapshot)
-    _notify_summary(market, title, content)
-    logger.info('%s 盘后总结生成完成: id=%s ai=%s 指数=%d 板块=%s',
-                market, report_id, ai_used, len(snapshot.get('indices') or []),
-                'Y' if snapshot.get('boards') else 'N')
+        title = f'📊 {trade_date} {"A股" if market == "A股" else "港股"}盘后总结'
+        content = build_report(market, trade_date, snapshot, review, prediction, ai_used)
+        report_id = _save_summary(market, trade_date, title, content,
+                                  prediction.get('suggestions') or [], snapshot, ai_used)
+        _persist_sentiment(market, trade_date, snapshot)
+        _notify_summary(market, title, content)
+        logger.info('%s 盘后总结生成完成: id=%s ai=%s 指数=%d 板块=%s',
+                    market, report_id, ai_used, len(snapshot.get('indices') or []),
+                    'Y' if snapshot.get('boards') else 'N')
+    finally:
+        _running[market] = False
 
     return {'ok': True, 'date': trade_date, 'market': market, 'cached': False,
             'report': get_today_summary(market), 'ai_used': ai_used, 'errors': []}
@@ -565,6 +598,10 @@ def generate_market_summary(market: str = 'A股', force: bool = False) -> dict:
 def generate_combined_report(force: bool = False) -> dict:
     """17:30 合并全市场日报：复用当日 A股/港股总结 + 全市场预判。"""
     trade_date = _local_today()
+    if _running.get(COMBINED):
+        return {'ok': False, 'reason': '合并日报正在生成中，请稍候', 'generating': True,
+                'date': trade_date, 'market': COMBINED, 'cached': False,
+                'report': None, 'errors': []}
     existing = get_today_summary(COMBINED)
     if existing and not force:
         return {'ok': True, 'date': trade_date, 'market': COMBINED, 'cached': True,
@@ -575,6 +612,17 @@ def generate_combined_report(force: bool = False) -> dict:
     if not a_report and not h_report:
         return {'ok': False, 'reason': '今日尚未生成任何单市场总结（A股/港股）', 'date': trade_date,
                 'market': COMBINED, 'cached': False, 'report': None, 'errors': []}
+
+    _running[COMBINED] = True
+    try:
+        return _generate_combined_locked(trade_date, a_report, h_report, force)
+    finally:
+        _running[COMBINED] = False
+
+
+def _generate_combined_locked(trade_date: str, a_report: dict | None, h_report: dict | None,
+                              force: bool = False) -> dict:
+    """合并日报生成主体（调用方已持有 _running 锁）"""
 
     # 合并快照：优先复用已存档快照，缺失市场现场采集
     def _snap(market: str, report: dict | None) -> dict:
