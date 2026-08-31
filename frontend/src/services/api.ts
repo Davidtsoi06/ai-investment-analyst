@@ -297,3 +297,41 @@ export const updateTracking = (id: number, patch: TrackingUpdate) => api<Trackin
 export const deleteTracking = (id: number) => api('DELETE', '/api/tracking/' + id);
 export const getTrackingEvents = (limit = 30) => api<TrackingEvent[]>('GET', '/api/tracking/events?limit=' + limit);
 export const runTrackingCheck = () => api<TrackingCheckResult>('POST', '/api/tracking/check');
+
+// ---- 盘后总结（S12，契约与后端 /api/summary/* 对齐） ----
+export interface SummaryReport {
+  id: number;
+  trade_date: string;
+  /** A股 / 港股 / 全市场（合并日报） */
+  market: string;
+  /** 四段式 Markdown 文本：市场全景/持仓追踪回顾/次日预判/操作建议清单 */
+  content: string;
+  /** 次日预判 JSON（字符串形式，可解析为对象） */
+  suggestions?: string | null;
+  created_at: string;
+}
+
+export interface SummaryGenerateResult {
+  ok?: boolean;
+  /** true 表示当日该市场已生成，未重复生成 */
+  existing?: boolean;
+  market?: string;
+  report?: SummaryReport;
+  error?: string;
+}
+
+export interface SummaryDailyResult {
+  ok?: boolean;
+  existing?: boolean;
+  report?: SummaryReport;
+  /** 通知推送结果 */
+  sent?: boolean;
+  reason?: string;
+}
+
+export const generateSummary = (market: string) =>
+  api<SummaryGenerateResult>('POST', '/api/summary/generate?market=' + encodeURIComponent(market));
+export const getTodaySummary = () => api<SummaryReport[]>('GET', '/api/summary/today');
+export const getSummaryHistory = (limit = 20) =>
+  api<SummaryReport[]>('GET', '/api/summary/history?limit=' + limit);
+export const generateDailySummary = () => api<SummaryDailyResult>('POST', '/api/summary/daily');
