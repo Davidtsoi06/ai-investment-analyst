@@ -14,6 +14,7 @@ TYPE_COOLDOWN = {
     'premarket': 3600 * 6,  # 盘前资讯 6 小时不重复
     'alert': 15 * 60,  # 异动 15 分钟
     'risk': 30 * 60,  # 风险预警 30 分钟
+    'summary': 3600 * 6,  # 盘后总结 6 小时不重复（定时任务 force=True 不受限）
 }
 
 

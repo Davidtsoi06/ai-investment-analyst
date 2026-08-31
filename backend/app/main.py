@@ -29,6 +29,8 @@ async def lifespan(_app: FastAPI):
     register_news_jobs()
     register_recommend_jobs()
     start_tracking_polling()
+    register_summary_jobs()
+    catchup_summaries()
     logger.info("数据库初始化完成: %s", settings.db_path)
     yield
     stop_scheduler()
@@ -616,5 +618,77 @@ def tracking_check(x_backend_token: str = Header(default="")):
     """手动触发一次全量异动检测（真实行情，返回检测结果）"""
     require_token(x_backend_token)
     return _tr_run_check()
+
+
+# ---------------- 盘后总结（S12） ----------------
+
+from .agents.summary_agent import (  # noqa: E402
+    catchup_summaries,
+    generate_combined_report as _sum_combined,
+    generate_market_summary as _sum_generate,
+    get_latest_report as _sum_latest,
+    get_today_summary as _sum_today,
+    list_summaries as _sum_history,
+    register_summary_jobs,
+)
+from .data_sources.market.snapshot_client import collect_snapshot  # noqa: E402
+
+
+class SummaryRunIn(BaseModel):
+    market: str = 'A股'
+    force: bool = False
+
+
+@app.get("/api/summary/today")
+def summary_today(
+    market: str = Query('A股', description='A股/港股/合并'),
+    x_backend_token: str = Header(default=""),
+):
+    """当日盘后报告（已生成返回；未生成 exists=false，不自动触发 AI 调用）"""
+    require_token(x_backend_token)
+    report = _sum_today(market)
+    if report is None:
+        return {'exists': False, 'market': market, 'report': None,
+                'reason': '当日报告尚未生成（可调用 POST /api/summary/run 生成）'}
+    return {'exists': True, 'market': market, 'report': report}
+
+
+@app.post("/api/summary/run")
+def summary_run(data: SummaryRunIn, x_backend_token: str = Header(default="")):
+    """生成盘后总结：market=A股/港股/合并；force=true 强制重新生成"""
+    require_token(x_backend_token)
+    market = (data.market or 'A股').strip()
+    if market == '合并':
+        return _sum_combined(force=data.force)
+    return _sum_generate(market, force=data.force)
+
+
+@app.get("/api/summary/history")
+def summary_history(limit: int = Query(30, ge=1, le=200), x_backend_token: str = Header(default="")):
+    """盘后报告历史（按日期倒序）"""
+    require_token(x_backend_token)
+    return {'items': _sum_history(limit)}
+
+
+@app.get("/api/summary/latest")
+def summary_latest(x_backend_token: str = Header(default="")):
+    """最新报告（优先当日合并日报；无则最近一份）"""
+    require_token(x_backend_token)
+    report = _sum_latest()
+    if report is None:
+        return {'exists': False, 'report': None, 'reason': '暂无盘后报告'}
+    return {'exists': True, 'report': report}
+
+
+@app.get("/api/summary/snapshot")
+def summary_snapshot(
+    market: str = Query('A股', description='A股/港股'),
+    x_backend_token: str = Header(default=""),
+):
+    """实时市场快照（指数/板块/成交额/情绪），供报告页展示与调试"""
+    require_token(x_backend_token)
+    if market not in ('A股', '港股'):
+        raise HTTPException(status_code=400, detail='market 仅支持 A股/港股')
+    return collect_snapshot(market)
 
 

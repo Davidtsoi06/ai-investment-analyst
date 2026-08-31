@@ -4,7 +4,7 @@
 SCHEMA_VERSION 递增并同步补充 MIGRATIONS：旧库通过 ALTER 增列/建索引平滑升级。
 """
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 TABLES_DDL = [
     # 1. 用户画像（引导问卷结果，可随时修改）
@@ -194,6 +194,15 @@ TABLES_DDL = [
 
 # 版本化迁移：{版本: 步骤列表}。步骤必须幂等（增列前先查列存在性，建索引用 IF NOT EXISTS）。
 MIGRATIONS: dict[int, list[dict]] = {
+    4: [
+        # S12 盘后总结：daily_summary 结构化列 + (trade_date, market) 唯一索引
+        {'kind': 'add_column', 'table': 'daily_summary', 'column': 'report_type', 'ddl': "ALTER TABLE daily_summary ADD COLUMN report_type TEXT"},
+        {'kind': 'add_column', 'table': 'daily_summary', 'column': 'title', 'ddl': "ALTER TABLE daily_summary ADD COLUMN title TEXT"},
+        {'kind': 'add_column', 'table': 'daily_summary', 'column': 'snapshot_json', 'ddl': "ALTER TABLE daily_summary ADD COLUMN snapshot_json TEXT"},
+        {'kind': 'add_column', 'table': 'daily_summary', 'column': 'ai_used', 'ddl': "ALTER TABLE daily_summary ADD COLUMN ai_used INTEGER DEFAULT 0"},
+        {'kind': 'add_column', 'table': 'daily_summary', 'column': 'generated_at', 'ddl': "ALTER TABLE daily_summary ADD COLUMN generated_at TEXT"},
+        {'kind': 'sql', 'ddl': "CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_summary_date_market ON daily_summary(trade_date, market)"},
+    ],
     3: [
         # S11 tracking：今日触发计数归属日（跨日轮询重置 today_triggered）+ 事件查询索引
         {'kind': 'add_column', 'table': 'tracking', 'column': 'today_date', 'ddl': "ALTER TABLE tracking ADD COLUMN today_date TEXT"},

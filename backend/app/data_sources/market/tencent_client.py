@@ -50,8 +50,8 @@ def _parse_a(text: str, symbol: str) -> Quote | None:
 
 
 def a_quote(symbol: str) -> Quote | None:
-    """A股实时行情，symbol 如 600519（自动加 sh/sz 前缀）"""
-    prefix = 'sh' if symbol.startswith(('6', '9')) else 'sz'
+    """A股实时行情，symbol 如 600519（自动加 sh/sz 前缀；5 开头为沪市 ETF）"""
+    prefix = 'sh' if symbol.startswith(('6', '9', '5')) else 'sz'
     text = get(TENCENT_URL + f'{prefix}{symbol}', encoding='gbk')
     return _parse_a(text, symbol)
 
@@ -95,7 +95,7 @@ def hk_quote(symbol: str) -> Quote | None:
 def get_kline(market: str, symbol: str, days: int = 120) -> list[KLineBar] | None:
     """腾讯日K（A股/港股统一备用源）"""
     if market == 'A股':
-        code = ('sh' if symbol.startswith(('6', '9')) else 'sz') + symbol
+        code = ('sh' if symbol.startswith(('6', '9', '5')) else 'sz') + symbol
     elif market == '港股':
         code = 'hk' + symbol
     else:
