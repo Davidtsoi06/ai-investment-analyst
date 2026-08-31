@@ -29,6 +29,7 @@ venv/
 # 临时与日志
 .tmp/
 .cache/
+.agent-teams/
 
 # 前端产物副本（由构建脚本生成）
 desktop/app-renderer/

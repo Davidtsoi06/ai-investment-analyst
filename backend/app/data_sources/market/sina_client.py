@@ -38,4 +38,9 @@ def a_quote(symbol: str) -> Quote | None:
         amount=float(parts[9]) if parts[9] else 0.0,
         timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         source='新浪',
+        # S9：新浪源无换手率/PE/市值字段，统一填 0（由腾讯主源提供）
+        turnover=0.0,
+        pe=0.0,
+        total_market_cap=0.0,
+        float_market_cap=0.0,
     )

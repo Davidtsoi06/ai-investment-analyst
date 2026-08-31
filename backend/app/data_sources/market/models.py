@@ -20,6 +20,11 @@ class Quote:
     amount: float  # 元
     timestamp: str
     source: str
+    # ---- S9 基本面扩展（数据源无对应字段时为 0）----
+    turnover: float = 0.0  # 换手率 %
+    pe: float = 0.0  # 市盈率（TTM，数据源口径）
+    total_market_cap: float = 0.0  # 总市值（元）
+    float_market_cap: float = 0.0  # 流通市值（元）
 
 
 @dataclass

@@ -19,6 +19,11 @@ def _parse_a(text: str, symbol: str) -> Quote | None:
     prev_close = float(parts[4]) if parts[4] else price
     change = float(parts[31]) if len(parts) > 31 and parts[31] else price - prev_close
     change_pct = float(parts[32]) if len(parts) > 32 and parts[32] else (price / prev_close - 1) * 100 if prev_close else 0.0
+    # S9 基本面字段（实测 qt.gtimg.cn A股字段索引：[38]换手率% [39]PE [44]流通市值(亿) [45]总市值(亿)）
+    turnover = float(parts[38]) if len(parts) > 38 and parts[38] else 0.0
+    pe = float(parts[39]) if len(parts) > 39 and parts[39] else 0.0
+    float_market_cap = float(parts[44]) * 1e8 if len(parts) > 44 and parts[44] else 0.0
+    total_market_cap = float(parts[45]) * 1e8 if len(parts) > 45 and parts[45] else 0.0
     return Quote(
         symbol=symbol,
         name=parts[1],
@@ -34,6 +39,10 @@ def _parse_a(text: str, symbol: str) -> Quote | None:
         amount=float(parts[37]) * 10000 if len(parts) > 37 and parts[37] else 0.0,  # 万元 -> 元
         timestamp=parts[30] if len(parts) > 30 and parts[30] else datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         source='腾讯',
+        turnover=round(turnover, 2),
+        pe=round(pe, 2),
+        total_market_cap=round(total_market_cap, 2),
+        float_market_cap=round(float_market_cap, 2),
     )
 
 
@@ -54,6 +63,10 @@ def hk_quote(symbol: str) -> Quote | None:
     prev_close = float(parts[4]) if parts[4] else price
     change = price - prev_close
     change_pct = (price / prev_close - 1) * 100 if prev_close else 0.0
+    # S9 基本面字段（实测 qt.gtimg.cn 港股：[39]PE [44]/[45]市值(亿)；换手率无对应字段填 0）
+    pe = float(parts[39]) if len(parts) > 39 and parts[39] else 0.0
+    float_market_cap = float(parts[44]) * 1e8 if len(parts) > 44 and parts[44] else 0.0
+    total_market_cap = float(parts[45]) * 1e8 if len(parts) > 45 and parts[45] else 0.0
     return Quote(
         symbol=symbol,
         name=parts[1],
@@ -69,6 +82,10 @@ def hk_quote(symbol: str) -> Quote | None:
         amount=0.0,
         timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         source='腾讯',
+        turnover=0.0,
+        pe=round(pe, 2),
+        total_market_cap=round(total_market_cap, 2),
+        float_market_cap=round(float_market_cap, 2),
     )
 
 

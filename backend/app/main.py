@@ -309,3 +309,91 @@ def portfolio_overview_api(x_backend_token: str = Header(default="")):
         "snapshot": snapshot,
         "status": portfolio_status(),
     }
+
+# ---------------- 自选股看板（S9） ----------------
+
+from .services.watchlist_service import (  # noqa: E402
+    add_watchlist as _wl_add,
+    delete_watchlist as _wl_delete,
+    list_groups as _wl_groups,
+    list_watchlist as _wl_list,
+    update_watchlist as _wl_update,
+)
+
+
+class WatchlistIn(BaseModel):
+    symbol: str
+    name: str = ''
+    market: str = 'A股'
+    group_name: str = '默认'
+
+
+class WatchlistUpdateIn(BaseModel):
+    name: str | None = None
+    group_name: str | None = None
+    sort_order: int | None = None
+
+
+@app.get("/api/watchlist")
+def watchlist_get(x_backend_token: str = Header(default="")):
+    """全部自选股（按 group_name / sort_order 排序，含各组）"""
+    require_token(x_backend_token)
+    return _wl_list()
+
+
+@app.get("/api/watchlist/groups")
+def watchlist_groups(x_backend_token: str = Header(default="")):
+    """自选股分组名列表（前端 tab 用）"""
+    require_token(x_backend_token)
+    return _wl_groups()
+
+
+@app.post("/api/watchlist")
+def watchlist_post(data: WatchlistIn, x_backend_token: str = Header(default="")):
+    """添加自选股（symbol 重复拒绝 409；name 为空自动查行情补全）"""
+    require_token(x_backend_token)
+    try:
+        return _wl_add(data.symbol, data.name, data.market, data.group_name)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.put("/api/watchlist/{item_id}")
+def watchlist_put(item_id: int, data: WatchlistUpdateIn, x_backend_token: str = Header(default="")):
+    """更新自选股（name / group_name / sort_order 可部分更新）"""
+    require_token(x_backend_token)
+    try:
+        return _wl_update(item_id, name=data.name, group_name=data.group_name, sort_order=data.sort_order)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/api/watchlist/{item_id}")
+def watchlist_delete(item_id: int, x_backend_token: str = Header(default="")):
+    """删除自选股"""
+    require_token(x_backend_token)
+    try:
+        _wl_delete(item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True, "id": item_id}
+
+
+@app.get("/api/news/related")
+def news_related(
+    keyword: str = Query(..., min_length=1, description="查询关键词（标题/摘要模糊匹配）"),
+    limit: int = Query(10, ge=1, le=50),
+    x_backend_token: str = Header(default=""),
+):
+    """关联资讯：按关键词查 news_cache（title / summary LIKE）"""
+    require_token(x_backend_token)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, title, summary, level, published_at FROM news_cache "
+            "WHERE title LIKE ? OR summary LIKE ? ORDER BY id DESC LIMIT ?",
+            (f'%{keyword}%', f'%{keyword}%', min(limit, 50)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
