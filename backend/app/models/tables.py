@@ -4,7 +4,7 @@
 SCHEMA_VERSION 递增并同步补充 MIGRATIONS：旧库通过 ALTER 增列/建索引平滑升级。
 """
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 TABLES_DDL = [
     # 1. 用户画像（引导问卷结果，可随时修改）
@@ -194,6 +194,12 @@ TABLES_DDL = [
 
 # 版本化迁移：{版本: 步骤列表}。步骤必须幂等（增列前先查列存在性，建索引用 IF NOT EXISTS）。
 MIGRATIONS: dict[int, list[dict]] = {
+    3: [
+        # S11 tracking：今日触发计数归属日（跨日轮询重置 today_triggered）+ 事件查询索引
+        {'kind': 'add_column', 'table': 'tracking', 'column': 'today_date', 'ddl': "ALTER TABLE tracking ADD COLUMN today_date TEXT"},
+        {'kind': 'sql', 'ddl': "CREATE INDEX IF NOT EXISTS idx_tracking_events_tid ON tracking_events(tracking_id)"},
+        {'kind': 'sql', 'ddl': "CREATE INDEX IF NOT EXISTS idx_tracking_events_created ON tracking_events(created_at)"},
+    ],
     2: [
         # recommendations 增加长线估值区间与生命周期状态
         {'kind': 'add_column', 'table': 'recommendations', 'column': 'valuation_min', 'ddl': "ALTER TABLE recommendations ADD COLUMN valuation_min REAL"},

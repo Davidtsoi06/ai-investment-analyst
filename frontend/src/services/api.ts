@@ -218,3 +218,82 @@ export const getRecommendationsHistory = (limit = 50) =>
   api<HistoryItem[]>('GET', `/api/recommend/history?limit=${limit}`);
 export const getRecommendationsPerformance = () => api<BacktestResult>('GET', '/api/recommend/backtest');
 export const evaluateRecommendations = () => api<EvaluateResult>('POST', '/api/recommend/backtest/evaluate');
+
+// ---- 实时追踪（S11，契约与后端 /api/tracking/* 对齐） ----
+export interface TrackingItem {
+  id: number;
+  symbol: string;
+  name?: string;
+  market: string;
+  /** 价格急涨急跌阈值（%）1~10，默认 3 */
+  price_change_pct?: number | null;
+  /** 成交量放大倍数 1.5~10，默认 3 */
+  volume_ratio?: number | null;
+  /** 大单金额阈值（元）50~500 万，默认 100 万 */
+  big_order_amount?: number | null;
+  /** 技术信号开关：1 开 / 0 关 */
+  tech_signals?: number | null;
+  /** AI 综合判断开关：1 开 / 0 关 */
+  ai_judge?: number | null;
+  /** 追踪状态：1 追踪中 / 0 已暂停 */
+  active?: number | null;
+  /** 今日触发次数 */
+  today_triggered?: number | null;
+  /** 今日事件数（后端从 tracking_events 统计） */
+  today_events?: number | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TrackingEvent {
+  id: number;
+  tracking_id?: number;
+  symbol: string;
+  /** 异动类型：价格急涨/价格急跌/放量/大单/技术信号/突破均线/AI判断 等 */
+  event_type: string;
+  /** 通知级别：紧急 / 关注 / 提示 */
+  level: string;
+  price?: number | null;
+  change_pct?: number | null;
+  detail?: string | null;
+  notified?: number;
+  created_at?: string;
+}
+
+export interface TrackingInput {
+  symbol: string;
+  name?: string;
+  market: string;
+  price_change_pct?: number;
+  volume_ratio?: number;
+  big_order_amount?: number;
+  tech_signals?: number;
+  ai_judge?: number;
+}
+
+export interface TrackingUpdate {
+  price_change_pct?: number;
+  volume_ratio?: number;
+  big_order_amount?: number;
+  tech_signals?: number;
+  ai_judge?: number;
+  active?: number;
+}
+
+export interface TrackingCheckResult {
+  ok?: boolean;
+  /** 本次扫描的追踪数量 */
+  checked?: number;
+  /** 触发数量（数组时取长度）或事件列表 */
+  triggered?: TrackingEvent[] | number;
+  events?: TrackingEvent[];
+  detail?: string;
+  error?: string;
+}
+
+export const getTracking = () => api<TrackingItem[]>('GET', '/api/tracking');
+export const addTracking = (input: TrackingInput) => api<TrackingItem>('POST', '/api/tracking', input);
+export const updateTracking = (id: number, patch: TrackingUpdate) => api<TrackingItem>('PUT', '/api/tracking/' + id, patch);
+export const deleteTracking = (id: number) => api('DELETE', '/api/tracking/' + id);
+export const getTrackingEvents = (limit = 30) => api<TrackingEvent[]>('GET', '/api/tracking/events?limit=' + limit);
+export const runTrackingCheck = () => api<TrackingCheckResult>('POST', '/api/tracking/check');

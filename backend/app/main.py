@@ -28,6 +28,7 @@ async def lifespan(_app: FastAPI):
     register_hourly_sync()
     register_news_jobs()
     register_recommend_jobs()
+    start_tracking_polling()
     logger.info("数据库初始化完成: %s", settings.db_path)
     yield
     stop_scheduler()
@@ -488,4 +489,132 @@ def register_recommend_jobs() -> None:
 
     add_cron_job(_recommend_job, hour=9, minute=15, job_id='recommend_daily')
     logger.info('推荐定时任务已注册（09:15 每日，仅交易日）')
+
+
+# ---------------- 实时追踪（S11） ----------------
+
+from .services.tracking_service import (  # noqa: E402
+    add_tracking as _tr_add,
+    delete_tracking as _tr_delete,
+    list_events as _tr_events,
+    list_tracking as _tr_list,
+    update_tracking as _tr_update,
+    TrackingDuplicateError,
+    TrackingLimitError,
+)
+from .agents.tracking_agent import run_check as _tr_run_check  # noqa: E402
+from .services.tracking_scheduler import (  # noqa: E402
+    ensure_tracking_polling,
+    start_tracking_polling,
+    stop_tracking_polling,
+)
+
+
+class TrackingIn(BaseModel):
+    symbol: str
+    name: str = ''
+    market: str = 'A股'
+    price_change_pct: float | None = None
+    volume_ratio: float | None = None
+    big_order_amount: float | None = None
+    tech_signals: int | None = None
+    ai_judge: int | None = None
+
+
+class TrackingUpdateIn(BaseModel):
+    name: str | None = None
+    price_change_pct: float | None = None
+    volume_ratio: float | None = None
+    big_order_amount: float | None = None
+    tech_signals: int | None = None
+    ai_judge: int | None = None
+    active: int | None = None
+
+
+def _tracking_error(e: Exception) -> HTTPException:
+    """错误映射：重复 409 / 上限·市场·参数 400 / 不存在 404"""
+    if isinstance(e, TrackingDuplicateError):
+        return HTTPException(status_code=409, detail=str(e))
+    if isinstance(e, TrackingLimitError):
+        return HTTPException(status_code=400, detail=str(e))
+    msg = str(e)
+    if '不存在' in msg:
+        return HTTPException(status_code=404, detail=msg)
+    return HTTPException(status_code=400, detail=msg)
+
+
+@app.get("/api/tracking")
+def tracking_list(x_backend_token: str = Header(default="")):
+    """全部追踪（含今日触发次数与今日事件数）"""
+    require_token(x_backend_token)
+    return _tr_list()
+
+
+@app.post("/api/tracking")
+def tracking_add(data: TrackingIn, x_backend_token: str = Header(default="")):
+    """添加追踪：总量≤10 / market 开启校验 / 重复 409 / name 自动补全"""
+    require_token(x_backend_token)
+    try:
+        row = _tr_add(
+            data.symbol, data.name, data.market,
+            price_change_pct=data.price_change_pct,
+            volume_ratio=data.volume_ratio,
+            big_order_amount=data.big_order_amount,
+            tech_signals=data.tech_signals,
+            ai_judge=data.ai_judge,
+        )
+    except ValueError as e:
+        raise _tracking_error(e)
+    ensure_tracking_polling()
+    return row
+
+
+@app.put("/api/tracking/{item_id}")
+def tracking_update(item_id: int, data: TrackingUpdateIn, x_backend_token: str = Header(default="")):
+    """更新追踪条件或 active（暂停=0 / 启用=1）"""
+    require_token(x_backend_token)
+    try:
+        row = _tr_update(
+            item_id,
+            name=data.name,
+            price_change_pct=data.price_change_pct,
+            volume_ratio=data.volume_ratio,
+            big_order_amount=data.big_order_amount,
+            tech_signals=data.tech_signals,
+            ai_judge=data.ai_judge,
+            active=data.active,
+        )
+    except ValueError as e:
+        raise _tracking_error(e)
+    if data.active is not None:
+        ensure_tracking_polling()
+    return row
+
+
+@app.delete("/api/tracking/{item_id}")
+def tracking_delete(item_id: int, x_backend_token: str = Header(default="")):
+    """删除追踪（连同事件记录）"""
+    require_token(x_backend_token)
+    try:
+        _tr_delete(item_id)
+    except ValueError as e:
+        raise _tracking_error(e)
+    if not _tr_list():
+        stop_tracking_polling()
+    return {"ok": True, "id": item_id}
+
+
+@app.get("/api/tracking/events")
+def tracking_events(limit: int = Query(30, ge=1, le=200), x_backend_token: str = Header(default="")):
+    """异动事件历史（时间倒序）"""
+    require_token(x_backend_token)
+    return _tr_events(limit)
+
+
+@app.post("/api/tracking/check")
+def tracking_check(x_backend_token: str = Header(default="")):
+    """手动触发一次全量异动检测（真实行情，返回检测结果）"""
+    require_token(x_backend_token)
+    return _tr_run_check()
+
 

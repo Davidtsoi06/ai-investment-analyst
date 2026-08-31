@@ -53,7 +53,9 @@ def _can_send(notify_type: str) -> bool:
         last = datetime.fromisoformat(row['sent_at'])
     except ValueError:
         return True
-    return (datetime.now().astimezone() - last).total_seconds() >= cooldown
+    if last.tzinfo is not None:
+        last = last.astimezone().replace(tzinfo=None)
+    return (datetime.now() - last).total_seconds() >= cooldown
 
 
 def send_notification(
