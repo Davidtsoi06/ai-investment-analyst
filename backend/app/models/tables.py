@@ -4,7 +4,7 @@
 SCHEMA_VERSION 递增并同步补充 MIGRATIONS：旧库通过 ALTER 增列/建索引平滑升级。
 """
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 TABLES_DDL = [
     # 1. 用户画像（引导问卷结果，可随时修改）
@@ -185,6 +185,17 @@ TABLES_DDL = [
         updated_at TEXT NOT NULL
     )"""
     ,
+    # 15. 智能问答历史（S13：每次问答落库，含分类与所用数据快照）
+    """CREATE TABLE IF NOT EXISTS chat_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        question TEXT NOT NULL,
+        category TEXT,
+        answer TEXT NOT NULL,
+        used_data_json TEXT,
+        degraded INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL
+    )"""
+    ,
     # 迁移版本记录
     """CREATE TABLE IF NOT EXISTS migrations (
         version INTEGER PRIMARY KEY,
@@ -194,6 +205,11 @@ TABLES_DDL = [
 
 # 版本化迁移：{版本: 步骤列表}。步骤必须幂等（增列前先查列存在性，建索引用 IF NOT EXISTS）。
 MIGRATIONS: dict[int, list[dict]] = {
+    5: [
+        # S13 智能问答：chat_history 表 + 查询索引（建表幂等，旧库升级时创建）
+        {'kind': 'sql', 'ddl': "CREATE TABLE IF NOT EXISTS chat_history (id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT NOT NULL, category TEXT, answer TEXT NOT NULL, used_data_json TEXT, degraded INTEGER DEFAULT 0, created_at TEXT NOT NULL)"},
+        {'kind': 'sql', 'ddl': "CREATE INDEX IF NOT EXISTS idx_chat_history_created ON chat_history(created_at)"},
+    ],
     4: [
         # S12 盘后总结：daily_summary 结构化列 + (trade_date, market) 唯一索引
         {'kind': 'add_column', 'table': 'daily_summary', 'column': 'report_type', 'ddl': "ALTER TABLE daily_summary ADD COLUMN report_type TEXT"},

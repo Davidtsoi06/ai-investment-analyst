@@ -335,3 +335,79 @@ export const getTodaySummary = () => api<SummaryReport[]>('GET', '/api/summary/t
 export const getSummaryHistory = (limit = 20) =>
   api<SummaryReport[]>('GET', '/api/summary/history?limit=' + limit);
 export const generateDailySummary = () => api<SummaryDailyResult>('POST', '/api/summary/daily');
+
+// ---- 智能问答与研报解读（S13，契约与后端 /api/chat/*、/api/research/* 对齐） ----
+export interface ChatUsedData {
+  quotes?: unknown[];
+  kline_summary?: unknown[];
+  holdings?: unknown[];
+  news?: unknown[];
+}
+
+/** POST /api/chat/ask 返回：{answer, category, used_data, degraded} */
+export interface ChatAnswer {
+  answer: string;
+  category?: string;
+  used_data?: ChatUsedData;
+  /** true = 无 AI Key 或调用失败，走了规则降级 */
+  degraded?: boolean;
+  error?: string;
+}
+
+/** GET /api/chat/history 条目 */
+export interface ChatHistoryItem {
+  id: number;
+  question: string;
+  category?: string | null;
+  answer?: string | null;
+  degraded?: number | boolean | null;
+  used_data_json?: string | null;
+  created_at?: string;
+}
+
+/** GET /api/research/list 条目：{title, org(机构), rating(评级), rating_change, target_price, date, stock, url, source} */
+export interface ResearchItem {
+  title: string;
+  org?: string | null;
+  rating?: string | null;
+  /** 评级变化（如：上调/首次/维持） */
+  rating_change?: string | null;
+  target_price?: string | number | null;
+  date?: string | null;
+  url?: string | null;
+  /** 关联股票信息 */
+  stock?: { name?: string; code?: string } | null;
+  /** 数据来源：eastmoney 或 news_cache（降级源，逐条标注） */
+  source?: string | null;
+}
+
+/** POST /api/research/interpret 结果：{ok, research, interpretation, holding_related, holding_match, degraded, source}；兼容整段 Markdown 或结构化字段两种返回 */
+export interface ResearchInterpret {
+  ok?: boolean;
+  /** 被解读的研报条目（原样回传） */
+  research?: ResearchItem | string | null;
+  /** 整段解读文本（AI 路径为 Markdown 分段；降级为纯文本模板） */
+  interpretation?: string;
+  summary?: string;
+  answer?: string;
+  content?: string;
+  core_views?: string;
+  target_price?: string;
+  rating_change?: string;
+  key_assumptions?: string;
+  risks?: string;
+  holdings_relation?: string;
+  /** 是否与持仓关联 */
+  holding_related?: boolean;
+  /** 是否命中具体持仓股票 */
+  holding_match?: boolean;
+  degraded?: boolean;
+  source?: string | null;
+}
+
+export const askChat = (question: string) => api<ChatAnswer>('POST', '/api/chat/ask', { question });
+export const getChatHistory = (limit = 30) => api<ChatHistoryItem[]>('GET', '/api/chat/history?limit=' + limit);
+export const getResearchList = (keyword = '', limit = 10) =>
+  api<ResearchItem[]>('GET', `/api/research/list?keyword=${encodeURIComponent(keyword)}&limit=${limit}`);
+export const interpretResearch = (keyword: string) => api<ResearchInterpret>('POST', '/api/research/interpret', { keyword });
+

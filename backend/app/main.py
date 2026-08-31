@@ -727,3 +727,82 @@ def summary_snapshot(
     return collect_snapshot(market)
 
 
+# ---------------- 智能问答与研报解读（S13） ----------------
+
+from .agents.chat_agent import ask as _chat_ask  # noqa: E402
+from .agents.chat_agent import list_history as _chat_history  # noqa: E402
+from .data_sources.research.eastmoney_research import (  # noqa: E402
+    fetch_research as _research_list,
+    interpret_research as _research_interpret,
+)
+
+
+class ChatAskIn(BaseModel):
+    question: str
+
+
+class ResearchInterpretIn(BaseModel):
+    keyword: str | None = None
+    title: str | None = None
+
+
+@app.post("/api/chat/ask")
+def chat_ask(data: ChatAskIn, x_backend_token: str = Header(default="")):
+    """智能问答：问题分类 + 上下文（实时行情/指标/画像/持仓/资讯）+ AI 或降级回答，保存对话历史。
+    返回 {answer, category, used_data:{quotes,kline_summary,holdings,news}, degraded}"""
+    require_token(x_backend_token)
+    question = (data.question or '').strip()
+    if not question:
+        raise HTTPException(status_code=400, detail='question 不能为空')
+    try:
+        return _chat_ask(question)
+    except Exception as e:  # noqa: BLE001
+        logger.exception('智能问答失败')
+        raise HTTPException(status_code=500, detail=f'问答失败: {e}')
+
+
+@app.get("/api/chat/history")
+def chat_history_api(
+    limit: int = Query(30, ge=1, le=100, description='返回条数'),
+    x_backend_token: str = Header(default=""),
+):
+    """对话历史（按时间倒序，含分类/回答/所用数据快照/是否降级）"""
+    require_token(x_backend_token)
+    return _chat_history(limit)
+
+
+@app.get("/api/research/list")
+def research_list_api(
+    keyword: str = Query('', description='关键词（标题/股票名/代码过滤，可空）'),
+    limit: int = Query(10, ge=1, le=50, description='返回条数'),
+    x_backend_token: str = Header(default=""),
+):
+    """研报列表（数组）：优先东财研报接口；不可用时降级本地资讯缓存。
+    条目含 {title, org, rating, rating_change, target_price, date, stock, url, source}，
+    source='eastmoney' 或 'news_cache'（降级时逐条标注，日志记录降级原因）"""
+    require_token(x_backend_token)
+    try:
+        result = _research_list(keyword or None, limit)
+        if result.get('note'):
+            logger.info('研报列表降级为资讯缓存: %s', result.get('note'))
+        return result.get('items') or []
+    except Exception as e:  # noqa: BLE001
+        logger.exception('研报列表失败')
+        raise HTTPException(status_code=500, detail=f'研报列表失败: {e}')
+
+
+@app.post("/api/research/interpret")
+def research_interpret_api(
+    data: ResearchInterpretIn,
+    x_backend_token: str = Header(default=""),
+):
+    """研报 AI 解读：{keyword 或 title} → 核心观点（目标价/评级变化/关键假设/风险提示，300 字摘要）
+    + 持仓关联分析；无 Key 或失败走降级模板"""
+    require_token(x_backend_token)
+    try:
+        return _research_interpret(title=data.title, keyword=data.keyword)
+    except Exception as e:  # noqa: BLE001
+        logger.exception('研报解读失败')
+        raise HTTPException(status_code=500, detail=f'研报解读失败: {e}')
+
+
