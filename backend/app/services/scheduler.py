@@ -24,4 +24,4 @@ def stop_scheduler() -> None:
 
 def add_cron_job(func, hour: int, minute: int, job_id: str | None = None) -> None:
     scheduler.add_job(func, 'cron', hour=hour, minute=minute, id=job_id, replace_existing=True)
-    logger.info('已注册定时任务 %s: %02d:%02d', job_id or func.__name__, hour, minute)
+    logger.info('已注册定时任务 %s: %s:%s', job_id or func.__name__, hour, minute)

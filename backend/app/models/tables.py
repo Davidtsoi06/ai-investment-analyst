@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
-"""SQLite 表定义：14 张核心表 + 迁移表（见需求文档 6.2 / 技术设计规范 五）"""
+"""SQLite 表定义：14 张核心表 + 迁移表（见需求文档 6.2 / 技术设计规范 五）
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION 递增并同步补充 MIGRATIONS：旧库通过 ALTER 增列/建索引平滑升级。
+"""
+
+SCHEMA_VERSION = 2
 
 TABLES_DDL = [
     # 1. 用户画像（引导问卷结果，可随时修改）
@@ -76,7 +79,7 @@ TABLES_DDL = [
         created_at TEXT NOT NULL
     )"""
     ,
-    # 6. AI 推荐历史
+    # 6. AI 推荐历史（S10：短线=入场区间/止损/目标价；长线=估值区间）
     """CREATE TABLE IF NOT EXISTS recommendations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         symbol TEXT NOT NULL,
@@ -85,21 +88,26 @@ TABLES_DDL = [
         rec_type TEXT NOT NULL,
         entry_min REAL, entry_max REAL,
         stop_loss REAL, target REAL,
+        valuation_min REAL, valuation_max REAL,
         confidence INTEGER,
         logic TEXT,
         risk_level TEXT,
         rec_date TEXT NOT NULL,
         rec_price REAL,
+        status TEXT NOT NULL DEFAULT 'open',
         created_at TEXT NOT NULL
     )"""
     ,
-    # 7. 推荐回测表现
+    # 7. 推荐回测表现（S10：结算结果，outcome=win/loss/stop/flat）
     """CREATE TABLE IF NOT EXISTS recommendation_performance (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         recommendation_id INTEGER NOT NULL,
         result_price REAL,
         result_pct REAL,
         outcome TEXT,
+        entry_price REAL,
+        eval_days INTEGER,
+        horizon TEXT,
         evaluated_at TEXT
     )"""
     ,
@@ -183,3 +191,21 @@ TABLES_DDL = [
         applied_at TEXT NOT NULL
     )"""
 ]
+
+# 版本化迁移：{版本: 步骤列表}。步骤必须幂等（增列前先查列存在性，建索引用 IF NOT EXISTS）。
+MIGRATIONS: dict[int, list[dict]] = {
+    2: [
+        # recommendations 增加长线估值区间与生命周期状态
+        {'kind': 'add_column', 'table': 'recommendations', 'column': 'valuation_min', 'ddl': "ALTER TABLE recommendations ADD COLUMN valuation_min REAL"},
+        {'kind': 'add_column', 'table': 'recommendations', 'column': 'valuation_max', 'ddl': "ALTER TABLE recommendations ADD COLUMN valuation_max REAL"},
+        {'kind': 'add_column', 'table': 'recommendations', 'column': 'status', 'ddl': "ALTER TABLE recommendations ADD COLUMN status TEXT NOT NULL DEFAULT 'open'"},
+        # recommendation_performance 增加结算字段
+        {'kind': 'add_column', 'table': 'recommendation_performance', 'column': 'entry_price', 'ddl': "ALTER TABLE recommendation_performance ADD COLUMN entry_price REAL"},
+        {'kind': 'add_column', 'table': 'recommendation_performance', 'column': 'eval_days', 'ddl': "ALTER TABLE recommendation_performance ADD COLUMN eval_days INTEGER"},
+        {'kind': 'add_column', 'table': 'recommendation_performance', 'column': 'horizon', 'ddl': "ALTER TABLE recommendation_performance ADD COLUMN horizon TEXT"},
+        # 索引
+        {'kind': 'sql', 'ddl': "CREATE INDEX IF NOT EXISTS idx_recommendations_rec_date ON recommendations(rec_date)"},
+        {'kind': 'sql', 'ddl': "CREATE INDEX IF NOT EXISTS idx_recommendations_status ON recommendations(status)"},
+        {'kind': 'sql', 'ddl': "CREATE INDEX IF NOT EXISTS idx_rec_perf_rec_id ON recommendation_performance(recommendation_id)"},
+    ],
+}

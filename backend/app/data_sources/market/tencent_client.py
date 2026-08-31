@@ -24,6 +24,8 @@ def _parse_a(text: str, symbol: str) -> Quote | None:
     pe = float(parts[39]) if len(parts) > 39 and parts[39] else 0.0
     float_market_cap = float(parts[44]) * 1e8 if len(parts) > 44 and parts[44] else 0.0
     total_market_cap = float(parts[45]) * 1e8 if len(parts) > 45 and parts[45] else 0.0
+    # S10 市净率（实测 qt.gtimg.cn A股字段索引：[46]PB）
+    pb = float(parts[46]) if len(parts) > 46 and parts[46] else 0.0
     return Quote(
         symbol=symbol,
         name=parts[1],
@@ -43,6 +45,7 @@ def _parse_a(text: str, symbol: str) -> Quote | None:
         pe=round(pe, 2),
         total_market_cap=round(total_market_cap, 2),
         float_market_cap=round(float_market_cap, 2),
+        pb=round(pb, 2),
     )
 
 

@@ -122,3 +122,99 @@ export interface RelatedNewsItem {
 }
 export const getRelatedNews = (keyword: string) =>
   api<RelatedNewsItem[]>('GET', `/api/news/related?keyword=${encodeURIComponent(keyword)}`);
+
+// ---- 推荐中心（S10，契约与后端 /api/recommend/* 对齐） ----
+export interface RecommendItem {
+  id: number;
+  symbol: string;
+  name?: string;
+  market?: string;
+  rec_type: string; // 短线 / 长线
+  entry_min?: number | null;
+  entry_max?: number | null;
+  stop_loss?: number | null;
+  target?: number | null;
+  valuation_min?: number | null; // 长线估值区间
+  valuation_max?: number | null;
+  confidence?: number | null; // 0-100
+  logic?: string | null;
+  risk_level?: string | null; // 低 / 中 / 高
+  rec_date?: string;
+  rec_price?: number | null;
+  status?: string; // open ...
+}
+
+export interface BlockedItem {
+  symbol: string;
+  name?: string;
+  rec_type?: string;
+  reasons: string[];
+}
+
+export interface TodayRecommendations {
+  ok?: boolean;
+  date?: string;
+  cached?: boolean;
+  source?: 'ai' | 'rules' | string;
+  items: RecommendItem[];
+  blocked?: BlockedItem[];
+  errors?: string[];
+}
+
+export interface HistoryItem extends RecommendItem {
+  outcome?: 'win' | 'loss' | 'stop' | 'flat' | 'null' | string | null;
+  result_pct?: number | null;
+  result_price?: number | null;
+  eval_days?: number | null;
+}
+
+export interface BacktestGroup {
+  count?: number;
+  win_rate?: number;
+  avg_return?: number;
+  total_return?: number;
+  wins?: number;
+  losses?: number;
+  stops?: number;
+  flats?: number;
+}
+
+export interface BacktestMonth {
+  month?: string;
+  count?: number;
+  win_rate?: number;
+  avg_return?: number;
+}
+
+export interface BacktestRecentItem {
+  id?: number;
+  symbol?: string;
+  name?: string;
+  rec_type?: string;
+  rec_date?: string;
+  confidence?: number | null;
+  outcome?: string | null;
+  result_pct?: number | null;
+  result_price?: number | null;
+  entry_price?: number | null;
+  eval_days?: number | null;
+}
+
+export interface BacktestResult {
+  summary?: BacktestGroup;
+  by_type?: Record<string, BacktestGroup>;
+  by_month?: BacktestMonth[];
+  recent?: BacktestRecentItem[];
+}
+
+export interface EvaluateResult {
+  evaluated?: number;
+  skipped?: { id: number; symbol: string; reason: string }[];
+}
+
+export const generateRecommendations = () => api<TodayRecommendations>('POST', '/api/recommend/run');
+export const getTodayRecommendations = () => api<TodayRecommendations>('GET', '/api/recommend/today');
+export const getRecommendationsHistory = (limit = 50) =>
+  api<HistoryItem[]>('GET', `/api/recommend/history?limit=${limit}`);
+export const getRecommendationsPerformance = () => api<BacktestResult>('GET', '/api/recommend/backtest');
+export const evaluateRecommendations = () => api<EvaluateResult>('POST', '/api/recommend/backtest/evaluate');

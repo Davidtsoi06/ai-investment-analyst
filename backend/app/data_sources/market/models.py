@@ -25,6 +25,7 @@ class Quote:
     pe: float = 0.0  # 市盈率（TTM，数据源口径）
     total_market_cap: float = 0.0  # 总市值（元）
     float_market_cap: float = 0.0  # 流通市值（元）
+    pb: float = 0.0  # 市净率（S10，腾讯 A 股字段 [46]，无数据源时为 0）
 
 
 @dataclass

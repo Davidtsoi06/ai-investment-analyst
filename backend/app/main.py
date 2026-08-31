@@ -27,6 +27,7 @@ async def lifespan(_app: FastAPI):
     start_scheduler()
     register_hourly_sync()
     register_news_jobs()
+    register_recommend_jobs()
     logger.info("数据库初始化完成: %s", settings.db_path)
     yield
     stop_scheduler()
@@ -397,3 +398,94 @@ def news_related(
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+# ---------------- 推荐模块（S10） ----------------
+
+from .agents.recommend_agent import generate_recommendations  # noqa: E402
+from .services.backtest_service import (  # noqa: E402
+    evaluate_pending,
+    get_backtest_report,
+    recommendation_history,
+)
+
+
+@app.get("/api/recommend/today")
+def recommend_today(x_backend_token: str = Header(default="")):
+    """今日推荐（未生成时自动触发生成；已生成返回缓存）"""
+    require_token(x_backend_token)
+    return generate_recommendations(force=False)
+
+
+@app.post("/api/recommend/run")
+def recommend_run(x_backend_token: str = Header(default="")):
+    """手动触发重新生成当日推荐"""
+    require_token(x_backend_token)
+    return generate_recommendations(force=True)
+
+
+@app.get("/api/recommend/history")
+def recommend_history_api(limit: int = Query(50, ge=1, le=200), x_backend_token: str = Header(default="")):
+    """推荐历史（含回测结果），按日期倒序"""
+    require_token(x_backend_token)
+    return recommendation_history(limit)
+
+
+@app.get("/api/recommend/backtest")
+def recommend_backtest(x_backend_token: str = Header(default="")):
+    """回测报告：胜率 / 平均收益 / 分类型 / 分月 / 明细（自动先结算未评估推荐）"""
+    require_token(x_backend_token)
+    return get_backtest_report()
+
+
+@app.post("/api/recommend/backtest/evaluate")
+def recommend_backtest_evaluate(x_backend_token: str = Header(default="")):
+    """手动结算未评估推荐"""
+    require_token(x_backend_token)
+    return evaluate_pending()
+
+
+# ---- 契约别名（/api/recommendations/*，与 /api/recommend/* 等价） ----
+
+@app.post("/api/recommendations/generate")
+def recommendations_generate(x_backend_token: str = Header(default="")):
+    """生成今日推荐（已生成返回 existing:true，不重复生成）"""
+    require_token(x_backend_token)
+    result = generate_recommendations(force=False)
+    result['existing'] = result.get('cached', False)
+    return result
+
+
+@app.get("/api/recommendations/today")
+def recommendations_today(x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    return generate_recommendations(force=False)
+
+
+@app.get("/api/recommendations/history")
+def recommendations_history(limit: int = Query(50, ge=1, le=200), x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    return recommendation_history(limit)
+
+
+@app.get("/api/recommendations/performance")
+def recommendations_performance(x_backend_token: str = Header(default="")):
+    require_token(x_backend_token)
+    return get_backtest_report()
+
+
+def register_recommend_jobs() -> None:
+    """注册每日 09:15 推荐生成定时任务（仅交易日，重复执行自动覆盖当日）"""
+    from .services.scheduler import add_cron_job
+
+    def _recommend_job() -> None:
+        if not is_trading_day('A股'):
+            return
+        try:
+            generate_recommendations(force=True)
+        except Exception as e:  # noqa: BLE001
+            logger.error('定时推荐生成失败: %s', e)
+
+    add_cron_job(_recommend_job, hour=9, minute=15, job_id='recommend_daily')
+    logger.info('推荐定时任务已注册（09:15 每日，仅交易日）')
+
