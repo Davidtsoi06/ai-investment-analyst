@@ -32,7 +32,16 @@ def _readonly_conn(path: Path) -> sqlite3.Connection:
 
 
 def detect_snapshot_folder() -> Path | None:
-    """探测理财软件配置的导出文件夹（读 finance.db app_settings，只读）"""
+    """探测理财软件导出的快照文件夹（优先级）：
+    1. 本软件默认数据目录 data/portfolio/
+    2. 理财软件配置的导出文件夹（读 finance.db app_settings，只读）
+    """
+    # 1) 默认目录：data/portfolio/portfolio_snapshot.json
+    from ..config import settings
+    default_folder = settings.data_dir / 'portfolio'
+    if (default_folder / SNAPSHOT_FILE).exists():
+        return default_folder
+    # 2) 理财软件配置的文件夹
     db = detect_db()
     if db is not None:
         try:
