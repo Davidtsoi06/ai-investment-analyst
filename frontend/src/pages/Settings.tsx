@@ -3,7 +3,7 @@ import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import {
-  getSettings, saveSettings, saveAiKey, testAiKey, getBackendStatus,
+  getSettings, saveSettings, saveAiKey, testAiKey, getBackendStatus, parseApiError,
   type Settings as SettingsType,
 } from '../services/api';
 
@@ -26,6 +26,7 @@ export default function Settings() {
   const [aiMsg, setAiMsg] = useState('');
   const [backendStatus, setBackendStatus] = useState<{ running: boolean; version: string | null } | null>(null);
   const [savedMsg, setSavedMsg] = useState('');
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     getBackendStatus().then(setBackendStatus).catch(() => null);
@@ -44,8 +45,10 @@ export default function Settings() {
     setMarkets((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]));
 
   const save = async () => {
+    setSaving(true);
     const res = await saveSettings({ markets, notifications, quiet_hours: quietHours });
-    setSavedMsg(res.ok ? '已保存 ✅' : `保存失败：${res.error}`);
+    setSaving(false);
+    setSavedMsg(res.ok ? '已保存 ✅' : `保存失败：${parseApiError(res.error)}`);
     setTimeout(() => setSavedMsg(''), 3000);
   };
 
@@ -53,13 +56,14 @@ export default function Settings() {
     if (!apiKey.trim()) return setAiMsg('请输入 API Key');
     const r = await saveAiKey(apiKey.trim());
     if (r.ok) { setAiConfigured(true); setAiMsg('已保存（加密存储）'); setApiKey(''); }
-    else setAiMsg(`保存失败：${r.error}`);
+    else setAiMsg(`保存失败：${parseApiError(r.error)}`);
   };
 
   const testKey = async () => {
     setAiMsg('测试中...');
     const r = await testAiKey(apiKey.trim() || undefined);
-    setAiMsg(r.ok ? `连接成功 ✅（可用模型：${(r.data as { models?: string[] }).models?.join(', ')}）` : `连接失败：${(r.data as { error?: string }).error}`);
+    const err = (r.data as { error?: string })?.error || r.error || '未知错误';
+    setAiMsg(r.ok ? `连接成功 ✅（可用模型：${(r.data as { models?: string[] }).models?.join(', ')}）` : `连接失败：${err}`);
   };
 
   return (
@@ -100,9 +104,9 @@ export default function Settings() {
             免打扰时段
           </label>
           <div className="flex items-center gap-2 ml-6">
-            <input type="time" value={quietHours.start} onChange={(e) => setQuietHours({ ...quietHours, start: e.target.value })} className="border border-border rounded px-2 py-1 text-sm" />
+            <input type="time" value={quietHours.start} onChange={(e) => setQuietHours({ ...quietHours, start: e.target.value })} className="rounded border border-border px-2 py-1 text-sm outline-none focus:border-primary-500" />
             <span>至</span>
-            <input type="time" value={quietHours.end} onChange={(e) => setQuietHours({ ...quietHours, end: e.target.value })} className="border border-border rounded px-2 py-1 text-sm" />
+            <input type="time" value={quietHours.end} onChange={(e) => setQuietHours({ ...quietHours, end: e.target.value })} className="rounded border border-border px-2 py-1 text-sm outline-none focus:border-primary-500" />
           </div>
           <label className="flex items-center gap-2 ml-6">
             <input type="checkbox" checked={quietHours.urgent_exempt} onChange={() => setQuietHours({ ...quietHours, urgent_exempt: !quietHours.urgent_exempt })} className="accent-primary-500" />
@@ -118,7 +122,7 @@ export default function Settings() {
         </div>
         <p className="text-xs text-text-muted mb-3">在 platform.deepseek.com 申请 API Key；密钥本地加密存储，绝不上传。</p>
         <div className="flex gap-2">
-          <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..." className="flex-1 border border-border rounded px-3 py-2 text-sm" />
+          <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..." className="flex-1 rounded border border-border px-3 py-2 text-sm outline-none focus:border-primary-500" />
           <Button size="sm" onClick={saveKey}>保存</Button>
           <Button size="sm" variant="secondary" onClick={testKey}>测试连接</Button>
         </div>
@@ -133,12 +137,12 @@ export default function Settings() {
       </Card>
 
       <div className="flex justify-end">
-        <Button onClick={save}>保存设置</Button>
+        <Button onClick={save} disabled={saving}>{saving ? '保存中...' : '保存设置'}</Button>
       </div>
 
       <Card>
         <h2 className="font-bold mb-2 text-sm">关于</h2>
-        <p className="text-xs text-text-secondary">AI 投资分析软件 v0.6.0 · 本地运行 · 数据安全 · 投资建议仅供参考</p>
+        <p className="text-xs text-text-secondary">AI 投资分析软件 v{window.appInfo?.versions?.app || '0.6.0'} · 本地运行 · 数据安全 · 投资建议仅供参考</p>
       </Card>
     </div>
   );

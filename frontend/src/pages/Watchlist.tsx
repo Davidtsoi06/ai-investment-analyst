@@ -3,6 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import Loading from '../components/ui/Loading';
+import EmptyState from '../components/ui/EmptyState';
+import Stat from '../components/ui/Stat';
 import KLineChart from '../components/KLineChart';
 import {
   addWatchlistItem,
@@ -11,9 +14,11 @@ import {
   getQuote,
   getRelatedNews,
   getWatchlist,
+  parseApiError,
   updateWatchlistGroup,
 } from '../services/api';
 import type { KlineBar, Quote, RelatedNewsItem, WatchlistItem } from '../services/api';
+import { fmtBig, fmtNum, fmtVolume, toList, upDownCls } from '../lib/format';
 
 type Period = 'day' | 'week' | 'month';
 
@@ -28,39 +33,6 @@ const LEVEL_BADGE: Record<string, 'danger' | 'warning' | 'default'> = {
   '中等': 'warning',
   '一般': 'default',
 };
-
-/** 兼容后端返回数组或 {items:[...]} 两种包装 */
-function toList<T>(data: unknown): T[] {
-  if (Array.isArray(data)) return data as T[];
-  if (data && typeof data === 'object') {
-    const d = data as Record<string, unknown>;
-    if (Array.isArray(d.items)) return d.items as T[];
-    if (Array.isArray(d.list)) return d.list as T[];
-  }
-  return [];
-}
-
-function fmtNum(v: number | null | undefined, digits = 2): string {
-  return v === null || v === undefined || Number.isNaN(v) ? '—' : v.toFixed(digits);
-}
-
-/** 金额/市值格式化：万亿/亿/万 */
-function fmtBig(v: number | null | undefined): string {
-  if (v === null || v === undefined || Number.isNaN(v)) return '—';
-  const abs = Math.abs(v);
-  if (abs >= 1e12) return (v / 1e12).toFixed(2) + ' 万亿';
-  if (abs >= 1e8) return (v / 1e8).toFixed(2) + ' 亿';
-  if (abs >= 1e4) return (v / 1e4).toFixed(2) + ' 万';
-  return String(Math.round(v));
-}
-
-function fmtVolume(v: number | null | undefined): string {
-  if (v === null || v === undefined || Number.isNaN(v)) return '—';
-  const abs = Math.abs(v);
-  if (abs >= 1e8) return (v / 1e8).toFixed(2) + ' 亿股';
-  if (abs >= 1e4) return (v / 1e4).toFixed(2) + ' 万股';
-  return Math.round(v) + ' 股';
-}
 
 /** 日K按周/月聚合（周K：ISO 周；月K：自然月） */
 function aggregateBars(bars: KlineBar[], unit: 'week' | 'month'): KlineBar[] {
@@ -91,20 +63,6 @@ function aggregateBars(bars: KlineBar[], unit: 'week' | 'month'): KlineBar[] {
     }
   }
   return [...map.values()];
-}
-
-function Stat({ label, value, cls = '' }: { label: string; value: string; cls?: string }) {
-  return (
-    <div className="bg-bg-secondary rounded px-3 py-2">
-      <div className="text-xs text-text-secondary">{label}</div>
-      <div className={`text-sm font-number mt-0.5 ${cls}`}>{value}</div>
-    </div>
-  );
-}
-
-function upDownCls(v: number | null | undefined): string {
-  if (v === null || v === undefined || v === 0) return 'text-text';
-  return v > 0 ? 'text-danger' : 'text-success';
 }
 
 export default function Watchlist() {
@@ -161,7 +119,7 @@ export default function Watchlist() {
     const r = await getWatchlist();
     setLoadingList(false);
     if (!r.ok) {
-      setMsg({ type: 'err', text: '自选股列表获取失败：' + (r.error || '后端不可用') });
+      setMsg({ type: 'err', text: '自选股列表获取失败：' + parseApiError(r.error) });
       return;
     }
     const list = toList<WatchlistItem>(r.data);
@@ -184,7 +142,7 @@ export default function Watchlist() {
     if (seq !== quoteSeq.current) return;
     setQuoteLoading(false);
     if (r.ok && r.data) setQuote(r.data);
-    else setQuoteError('行情获取失败：' + (r.error || '后端或数据源不可用'));
+    else setQuoteError('行情获取失败：' + parseApiError(r.error, '后端或数据源不可用'));
   }, []);
 
   const loadKline = useCallback(async (item: WatchlistItem, p: Period) => {
@@ -195,7 +153,7 @@ export default function Watchlist() {
     if (seq !== klineSeq.current) return;
     setKlineLoading(false);
     if (r.ok && r.data && Array.isArray(r.data.bars)) setKlineBars(r.data.bars);
-    else setKlineError('K线获取失败：' + (r.error || '后端或数据源不可用'));
+    else setKlineError('K线获取失败：' + parseApiError(r.error, '后端或数据源不可用'));
   }, []);
 
   const loadNews = useCallback(async (item: WatchlistItem) => {
@@ -206,7 +164,7 @@ export default function Watchlist() {
     if (seq !== newsSeq.current) return;
     setNewsLoading(false);
     if (r.ok) setNews(toList<RelatedNewsItem>(r.data));
-    else setNewsError('关联资讯获取失败：' + (r.error || '后端或数据源不可用'));
+    else setNewsError('关联资讯获取失败：' + parseApiError(r.error, '后端或数据源不可用'));
   }, []);
 
   // 选中变化：清空并加载行情 / 资讯；K 线由下方 [selected, period] 效应负责
@@ -256,7 +214,7 @@ export default function Watchlist() {
     const r = await addWatchlistItem({ symbol, market: form.market, group_name: form.group.trim() || '默认' });
     setSubmitting(false);
     if (!r.ok) {
-      setMsg({ type: 'err', text: '添加失败：' + (r.error || '后端不可用') });
+      setMsg({ type: 'err', text: '添加失败：' + parseApiError(r.error) });
       return;
     }
     setForm((f) => ({ ...f, symbol: '' }));
@@ -274,7 +232,7 @@ export default function Watchlist() {
       await loadWatchlist();
       setMsg({ type: 'ok', text: '已删除 ' + (item.name || item.symbol) });
     } else {
-      setMsg({ type: 'err', text: '删除失败：' + (r.error || '后端不可用') });
+      setMsg({ type: 'err', text: '删除失败：' + parseApiError(r.error) });
     }
     window.setTimeout(() => setMsg(null), 2500);
   };
@@ -285,7 +243,7 @@ export default function Watchlist() {
       await loadWatchlist();
       setMsg({ type: 'ok', text: '已移至「' + group + '」' });
     } else {
-      setMsg({ type: 'err', text: '改分组失败：' + (r.error || '后端不可用') });
+      setMsg({ type: 'err', text: '改分组失败：' + parseApiError(r.error) });
     }
     window.setTimeout(() => setMsg(null), 2500);
   };
@@ -356,9 +314,9 @@ export default function Watchlist() {
           ))}
         </div>
         {loadingList ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : groupItems.length === 0 ? (
-          <p className="text-sm text-text-muted">暂无自选股，先在上方添加一只（如 600519 贵州茅台）。</p>
+          <EmptyState icon="⭐" title="暂无自选股" description="先在上方添加一只（如 600519 贵州茅台），即可查看实时行情、K 线与关联资讯。" />
         ) : (
           <div className="divide-y divide-border">
             {groupItems.map((item) => (
@@ -438,7 +396,7 @@ export default function Watchlist() {
                 </div>
               </>
             ) : quoteLoading ? (
-              <p className="text-sm text-text-muted">行情加载中...</p>
+              <Loading className="py-4" text="行情加载中..." />
             ) : null}
           </Card>
 
@@ -468,9 +426,9 @@ export default function Watchlist() {
             {displayBars.length > 0 ? (
               <KLineChart bars={displayBars} height={430} />
             ) : klineLoading ? (
-              <p className="text-sm text-text-muted">K线加载中...</p>
+              <Loading className="py-4" text="K线加载中..." />
             ) : (
-              <p className="text-sm text-text-muted">暂无K线数据</p>
+              <EmptyState icon="📉" title="暂无K线数据" description="后端或数据源暂未返回 K 线，可稍后刷新重试。" className="py-6" />
             )}
           </Card>
 
@@ -501,9 +459,14 @@ export default function Watchlist() {
                 ))}
               </div>
             ) : newsLoading ? (
-              <p className="text-sm text-text-muted">资讯加载中...</p>
+              <Loading className="py-4" text="资讯加载中..." />
             ) : (
-              <p className="text-sm text-text-muted">暂无关联资讯</p>
+              <EmptyState
+                icon="📰"
+                title="暂无关联资讯"
+                description={'暂未找到与「' + (selected.name || selected.symbol) + '」相关的资讯。'}
+                className="py-6"
+              />
             )}
           </Card>
         </>

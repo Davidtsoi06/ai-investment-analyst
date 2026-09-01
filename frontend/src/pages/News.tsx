@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
-import { api } from '../services/api';
+import Loading from '../components/ui/Loading';
+import EmptyState from '../components/ui/EmptyState';
+import { api, parseApiError } from '../services/api';
 
 interface NewsItem {
   id: number;
@@ -35,13 +37,16 @@ export default function News() {
   const [premarket, setPremarket] = useState<Premarket | null>(null);
   const [items, setItems] = useState<NewsItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState('');
+  const [loadingList, setLoadingList] = useState(false);
+  const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const load = async () => {
+    setLoadingList(true);
     const [p, l] = await Promise.all([
       api<Premarket>('GET', '/api/news/premarket/today'),
       api<NewsItem[]>('GET', '/api/news/latest?limit=30'),
     ]);
+    setLoadingList(false);
     if (p.ok) setPremarket(p.data as Premarket);
     if (l.ok) setItems((l.data as NewsItem[]) || []);
   };
@@ -50,13 +55,13 @@ export default function News() {
 
   const refresh = async () => {
     setLoading(true);
-    setMsg('抓取整合中...');
+    setMsg({ type: 'ok', text: '抓取整合中...' });
     const r = await api<{ ok: boolean; fetched?: number; saved?: number }>('POST', '/api/news/premarket/run');
-    if (r.ok && r.data?.ok) setMsg(`整合完成：抓取 ${r.data.fetched} 条 / 新增 ${r.data.saved} 条`);
-    else setMsg(`失败：${(r.data as { reason?: string })?.reason || r.error}`);
+    if (r.ok && r.data?.ok) setMsg({ type: 'ok', text: `整合完成：抓取 ${r.data.fetched} 条 / 新增 ${r.data.saved} 条` });
+    else setMsg({ type: 'err', text: '抓取失败：' + ((r.data as { reason?: string })?.reason || parseApiError(r.error)) });
     await load();
     setLoading(false);
-    setTimeout(() => setMsg(''), 4000);
+    setTimeout(() => setMsg(null), 4000);
   };
 
   const renderPremarket = (content: string) =>
@@ -78,19 +83,25 @@ export default function News() {
         </div>
         <Button size="sm" onClick={refresh} disabled={loading}>{loading ? '整合中...' : '抓取最新资讯'}</Button>
       </div>
-      {msg && <p className="text-sm text-text-secondary">{msg}</p>}
+      {msg && <p className={`text-sm ${msg.type === 'ok' ? 'text-success' : 'text-danger'}`}>{msg.text}</p>}
 
       <Card>
         <div className="flex items-center gap-2 mb-3">
           <h2 className="font-bold text-sm">今日盘前资讯</h2>
           {premarket?.date && <span className="text-xs text-text-muted">{premarket.date}{premarket.fetched ? ` · 抓取 ${premarket.fetched} 条` : ''}</span>}
         </div>
-        {premarket?.content ? renderPremarket(premarket.content) : <p className="text-sm text-text-muted">今日尚无盘前资讯，点击右上角抓取。</p>}
+        {premarket?.content ? renderPremarket(premarket.content) : (
+          <EmptyState icon="📰" title="今日尚无盘前资讯" description="点击右上角「抓取最新资讯」获取今日盘前整合内容。" className="py-6" />
+        )}
       </Card>
 
       <Card>
         <h2 className="font-bold text-sm mb-3">最新资讯（AI 分级）</h2>
-        {items.length === 0 && <p className="text-sm text-text-muted">暂无资讯</p>}
+        {loadingList ? (
+          <Loading />
+        ) : items.length === 0 ? (
+          <EmptyState icon="🗞️" title="暂无资讯" description="可点击右上角「抓取最新资讯」手动抓取整合。" />
+        ) : null}
         <div className="divide-y divide-border">
           {items.map((it) => (
             <div key={it.id} className="py-2.5">

@@ -697,6 +697,118 @@ export const paperTradeFromRecommendation = tradeFromRecommendation;
 export const getPaperHistory = (limit = 50) =>
   api<PaperHistoryItem[]>('GET', '/api/paper/history?limit=' + limit);
 
+// ---- 持仓总览与仪表盘（S16） ----
+export interface HoldingItem {
+  symbol: string;
+  name?: string | null;
+  market?: string;
+  currency?: string | null;
+  quantity?: number;
+  cost_price?: number | null;
+  current_price?: number | null;
+  /** 数据来源：portfolio_app（理财软件同步）/ manual（手动） */
+  source?: string;
+  sync_at?: string | null;
+  [k: string]: unknown;
+}
+
+export interface PortfolioAccount {
+  name: string;
+  broker?: string | null;
+  currency?: string | null;
+  cash_balance?: number | null;
+  [k: string]: unknown;
+}
+
+export interface NetWorth {
+  date?: string | null;
+  total_cash?: number | null;
+  total_investments?: number | null;
+  net_worth?: number | null;
+  [k: string]: unknown;
+}
+
+export interface PortfolioSnapshot {
+  holdings?: unknown[] | null;
+  accounts?: PortfolioAccount[] | null;
+  transactions?: unknown[] | null;
+  net_worth?: NetWorth | null;
+  synced_at?: string | null;
+  [k: string]: unknown;
+}
+
+export interface PortfolioStatus {
+  detected: boolean;
+  db_path?: string | null;
+  [k: string]: unknown;
+}
+
+/** GET /api/portfolio/overview：本地持仓明细 + 理财软件快照（账户/净值）+ 对接状态 */
+export interface PortfolioOverview {
+  holdings?: HoldingItem[] | null;
+  snapshot?: PortfolioSnapshot | null;
+  status?: PortfolioStatus | null;
+  [k: string]: unknown;
+}
+
+/** POST /api/portfolio/sync 结果 */
+export interface PortfolioSyncResult {
+  ok?: boolean;
+  reason?: string;
+  holdings?: number;
+  accounts?: number;
+  transactions?: number;
+  net_worth?: NetWorth | null;
+  synced_at?: string | null;
+  [k: string]: unknown;
+}
+
+/** GET /api/notifications：应用内通知 */
+export interface NotificationItem {
+  id: number;
+  type?: string | null;
+  level?: string | null;
+  title: string;
+  content?: string | null;
+  sent_at?: string | null;
+  [k: string]: unknown;
+}
+
+/** 市场快照指数（GET /api/summary/snapshot） */
+export interface MarketIndex {
+  symbol: string;
+  name: string;
+  market: string;
+  price: number;
+  change_pct: number;
+  change: number;
+  open: number;
+  high: number;
+  low: number;
+  prev_close: number;
+  amount?: number;
+  volume?: number;
+  timestamp?: string;
+}
+
+/** GET /api/summary/snapshot?market=A股|港股：指数/情绪/板块快照 */
+export interface MarketSnapshot {
+  market: string;
+  indices?: MarketIndex[] | null;
+  breadth?: { up?: number; down?: number; flat?: number; limit_up?: number; limit_down?: number; turnover?: number } | null;
+  boards?: unknown;
+  turnover?: number | null;
+  timestamp?: string;
+  [k: string]: unknown;
+}
+
+export const getPortfolioOverview = () => api<PortfolioOverview>('GET', '/api/portfolio/overview');
+export const getPortfolioStatus = () => api<PortfolioStatus>('GET', '/api/portfolio/status');
+export const syncPortfolio = () => api<PortfolioSyncResult>('POST', '/api/portfolio/sync');
+export const getNotifications = (limit = 10) => api<NotificationItem[]>('GET', '/api/notifications?limit=' + limit);
+export const getMarketSnapshot = (market: string) =>
+  api<MarketSnapshot>('GET', '/api/summary/snapshot?market=' + encodeURIComponent(market));
+
 /** 解析后端 400 错误 JSON {detail} → 可读文本 */
 export function parseApiError(err: string | undefined, fallback = '后端不可用'): string {
   if (!err) return fallback;

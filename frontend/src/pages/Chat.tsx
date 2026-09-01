@@ -5,11 +5,13 @@ import type { ReactNode, KeyboardEvent } from 'react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import Loading from '../components/ui/Loading';
 import {
   askChat,
   getChatHistory,
   getResearchList,
   interpretResearch,
+  parseApiError,
 } from '../services/api';
 import type { ChatHistoryItem, ResearchInterpret, ResearchItem } from '../services/api';
 
@@ -182,7 +184,7 @@ export default function Chat() {
     const r = await getChatHistory(30);
     setHistoryLoading(false);
     if (r.ok) setHistory(toList<ChatHistoryItem>(r.data));
-    else setHistoryError('对话历史获取失败：' + (r.error || '后端不可用'));
+    else setHistoryError('对话历史获取失败：' + parseApiError(r.error));
   }, []);
 
   useEffect(() => {
@@ -207,7 +209,7 @@ export default function Chat() {
       } else {
         setMessages((prev) => [
           ...prev,
-          { id: nextId(), role: 'assistant', text: '回答失败：' + (r.error || '后端不可用，请稍后重试。'), error: true },
+          { id: nextId(), role: 'assistant', text: '回答失败：' + parseApiError(r.error, '后端不可用，请稍后重试。'), error: true },
         ]);
       }
       sendingRef.current = false;
@@ -251,7 +253,7 @@ export default function Chat() {
     if (seq !== searchSeq.current) return;
     setResearchLoading(false);
     if (r.ok) setResearchItems(toList<ResearchItem>(r.data));
-    else setResearchError('研报列表获取失败：' + (r.error || '后端不可用'));
+    else setResearchError('研报列表获取失败：' + parseApiError(r.error));
   }, []);
 
   useEffect(() => {
@@ -276,7 +278,7 @@ export default function Chat() {
     if (seq !== interpretSeq.current) return;
     setInterpretLoading(false);
     if (r.ok && r.data) setInterpret(r.data);
-    else setInterpretError('解读失败：' + (r.error || '后端不可用'));
+    else setInterpretError('解读失败：' + parseApiError(r.error));
   };
 
   const tabBtn = (key: 'chat' | 'research', label: string) => (
@@ -401,7 +403,7 @@ export default function Chat() {
             </div>
             <div className="flex-1 overflow-y-auto max-h-[560px]">
               {historyError && <p className="px-4 py-2 text-xs text-danger">{historyError}</p>}
-              {historyLoading && history.length === 0 && <p className="px-4 py-3 text-xs text-text-muted">加载中...</p>}
+              {historyLoading && history.length === 0 && <Loading className="py-4" text="加载中..." />}
               {!historyLoading && history.length === 0 && !historyError && (
                 <p className="px-4 py-3 text-xs text-text-muted">暂无历史记录，提问后自动保存。</p>
               )}
@@ -456,7 +458,7 @@ export default function Chat() {
             </div>
             <div className="flex-1 overflow-y-auto max-h-[500px]">
               {researchError && <p className="px-4 py-3 text-xs text-danger">{researchError}</p>}
-              {researchLoading && researchItems.length === 0 && <p className="px-4 py-3 text-xs text-text-muted">加载中...</p>}
+              {researchLoading && researchItems.length === 0 && <Loading className="py-4" text="加载中..." />}
               {!researchLoading && researchItems.length === 0 && !researchError && (
                 <p className="px-4 py-3 text-xs text-text-muted">暂无研报数据，可点击「搜索」重试。</p>
               )}

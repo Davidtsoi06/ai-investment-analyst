@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 
 const navItems = [
   { path: '/', label: '仪表盘', icon: '📊' },
@@ -14,16 +15,43 @@ const navItems = [
   { path: '/settings', label: '系统设置', icon: '⚙️' },
 ];
 
+// 版本号优先取主进程注入的 appInfo（打包后随 package.json 更新），开发环境兜底
+const APP_VERSION = '0.6.0';
+
 export default function AppLayout() {
+  const [backendOk, setBackendOk] = useState<boolean | null>(null);
+
+  // 后端连接状态检测（Electron 环境经 window.backend；浏览器直连调试不提示）
+  useEffect(() => {
+    if (!window.backend) return;
+    let alive = true;
+    const check = async () => {
+      try {
+        const st = await window.backend?.status();
+        if (alive) setBackendOk(!!st && st.running === true);
+      } catch {
+        if (alive) setBackendOk(false);
+      }
+    };
+    void check();
+    const t = window.setInterval(check, 20000);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+  }, []);
+
+  const version = window.appInfo?.versions?.app || APP_VERSION;
+
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* 左侧导航 220px（深蓝标题栏 + 导航） */}
+      {/* 左侧导航 220px（深蓝标题栏 + 导航，激活态对齐理财软件） */}
       <aside className="w-[220px] shrink-0 bg-primary-900 text-white flex flex-col">
         <div className="h-16 flex items-center gap-2 px-4 border-b border-white/10">
           <span className="text-xl">📈</span>
           <div>
             <div className="font-bold text-sm">AI 投资分析</div>
-            <div className="text-xs opacity-70">v0.6.0</div>
+            <div className="text-xs opacity-70">v{version}</div>
           </div>
         </div>
         <nav className="flex-1 overflow-y-auto py-2">
@@ -33,10 +61,10 @@ export default function AppLayout() {
               to={item.path}
               end={item.path === '/'}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
+                `flex items-center gap-3 px-4 py-2.5 text-sm transition-all border-l-[3px] ${
                   isActive
-                    ? 'bg-primary-700 text-white'
-                    : 'text-white/80 hover:bg-primary-700/60 hover:text-white'
+                    ? 'bg-white/15 text-white border-primary-300 font-medium'
+                    : 'border-transparent text-white/80 hover:bg-white/10 hover:text-white'
                 }`
               }
             >
@@ -48,8 +76,16 @@ export default function AppLayout() {
         <div className="p-3 text-xs text-white/50 border-t border-white/10">本地运行 · 数据安全</div>
       </aside>
       {/* 内容区 */}
-      <main className="flex-1 overflow-y-auto p-6">
-        <Outlet />
+      <main className="flex-1 flex flex-col overflow-hidden">
+        {backendOk === false && (
+          <div className="flex items-center justify-center gap-2 bg-warning/15 border-b border-warning/40 px-4 py-1.5 text-xs font-medium text-warning">
+            <span>⚠</span>
+            <span>后端服务未连接，部分功能不可用（正在自动重试）</span>
+          </div>
+        )}
+        <div className="flex-1 overflow-y-auto p-6">
+          <Outlet />
+        </div>
       </main>
     </div>
   );

@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import Loading from '../components/ui/Loading';
+import EmptyState from '../components/ui/EmptyState';
+import Stat from '../components/ui/Stat';
+import { fmtMoney, fmtPct, fmtPrice, fmtTime, num, toList, upDownCls } from '../lib/format';
 import {
   getPaperAccount,
   getPaperHistory,
@@ -22,76 +26,6 @@ import type {
   PaperPortfolio,
   RecommendItem,
 } from '../services/api';
-
-/** 兼容后端返回数组或 {items:[...]}/{list:[...]} 两种包装 */
-function toList<T>(data: unknown): T[] {
-  if (Array.isArray(data)) return data as T[];
-  if (data && typeof data === 'object') {
-    const d = data as Record<string, unknown>;
-    if (Array.isArray(d.items)) return d.items as T[];
-    if (Array.isArray(d.list)) return d.list as T[];
-    if (Array.isArray(d.positions)) return d.positions as T[];
-  }
-  return [];
-}
-
-/** 涨跌配色（虚拟账本契约：涨绿跌红） */
-function upDownCls(v: number | null | undefined): string {
-  if (v === null || v === undefined || v === 0) return 'text-text';
-  return v > 0 ? 'text-success' : 'text-danger';
-}
-
-/** 金额：元 → 万/亿 中文缩写 */
-function fmtMoney(v: number | null | undefined): string {
-  if (v === null || v === undefined || Number.isNaN(v)) return '—';
-  const abs = Math.abs(v);
-  if (abs >= 1e8) return '¥' + (v / 1e8).toFixed(2) + ' 亿';
-  if (abs >= 1e4) return '¥' + (v / 1e4).toFixed(2) + ' 万';
-  return '¥' + v.toFixed(2);
-}
-
-/** 比率归一化为百分数：0.667 → 66.7；66.7 → 66.7 */
-function toPercent(v: number | null | undefined): number | null {
-  if (v === null || v === undefined || Number.isNaN(v)) return null;
-  return Math.abs(v) <= 1 ? v * 100 : v;
-}
-
-function fmtPct(v: number | null | undefined, digits = 1): string {
-  const p = toPercent(v);
-  return p === null ? '—' : (p > 0 ? '+' : '') + p.toFixed(digits) + '%';
-}
-
-/** 价格显示：A 股 2 位、港股 3 位 */
-function fmtPrice(v: number | null | undefined, market?: string): string {
-  if (v === null || v === undefined || Number.isNaN(v)) return '—';
-  return v.toFixed(market === '港股' ? 3 : 2);
-}
-
-/** 时间：opened_at "2026-08-31 15:30:05" → "08-31 15:30" */
-function fmtTime(s: string | null | undefined): string {
-  if (!s) return '';
-  // ISO（后端 utc_now，UTC）→ 北京时间；兼容 "2026-08-31 15:30:05" 本地格式
-  if (s.includes('T')) {
-    const d = new Date(s);
-    if (!Number.isNaN(d.getTime())) {
-      const bj = new Date(d.getTime() + 8 * 3600 * 1000);
-      const p = (n: number) => String(n).padStart(2, '0');
-      return p(bj.getMonth() + 1) + '-' + p(bj.getDate()) + ' ' + p(bj.getHours()) + ':' + p(bj.getMinutes());
-    }
-  }
-  const m = /(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/.exec(s);
-  if (m) return m[1].slice(5) + ' ' + m[2];
-  return s.slice(0, 16);
-}
-
-function Stat({ label, value, cls = '' }: { label: string; value: string; cls?: string }) {
-  return (
-    <div className="bg-bg-secondary rounded px-3 py-2">
-      <div className="text-xs text-text-secondary">{label}</div>
-      <div className={'text-sm font-number mt-0.5 ' + cls}>{value}</div>
-    </div>
-  );
-}
 
 /** 结果状态 → 徽章 */
 const OUTCOME_BADGE: Record<string, 'success' | 'danger' | 'warning' | 'default'> = {
@@ -311,8 +245,6 @@ export default function Ledger() {
   const btSummary = useMemo(() => (backtest?.summary ?? {}) as Record<string, unknown>, [backtest]);
   const btByType = useMemo(() => (backtest?.by_type ?? {}) as Record<string, Record<string, unknown>>, [backtest]);
   const btRecent = useMemo(() => toList<BacktestRecentItem>(backtest?.recent).slice(0, 8), [backtest]);
-  const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
-
   const positions = useMemo<PaperPosition[]>(() => toList<PaperPosition>(portfolio?.positions), [portfolio]);
   const balance = num(portfolio?.balance);
   const totalAssets = num(portfolio?.total_assets);
@@ -344,7 +276,7 @@ export default function Ledger() {
           {opened === true && <span className="text-xs text-text-muted">初始资金 {fmtMoney(initialBalance)}</span>}
         </div>
         {opened === null ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading className="py-4" />
         ) : opened !== true ? (
           <div className="flex flex-wrap items-end gap-3">
             <div className="w-44">
@@ -375,9 +307,9 @@ export default function Ledger() {
         {opened !== true ? (
           <p className="text-sm text-text-muted">请先在上方开通虚拟账户。</p>
         ) : recLoading && recs.length === 0 ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : recs.length === 0 ? (
-          <p className="text-sm text-text-muted">今日暂无推荐，可先到「推荐中心」生成，或使用下方手动交易。</p>
+          <EmptyState icon="🎯" title="今日暂无推荐" description="可先到「推荐中心」生成今日推荐，或使用下方手动交易。" />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {recs.map((rec) => {
@@ -457,7 +389,7 @@ export default function Ledger() {
           <span className="text-xs text-text-muted">{positions.length + ' 只 · 现价实时估值'}</span>
         </div>
         {positions.length === 0 ? (
-          <p className="text-sm text-text-muted">暂无持仓。可从今日推荐一键买入，或手动下单。</p>
+          <EmptyState icon="💼" title="暂无持仓" description="可从今日推荐一键买入，或使用上方手动交易下单。" />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -515,9 +447,9 @@ export default function Ledger() {
           <span className="text-xs text-text-muted">AI 推荐记录自动回测 · 短线 5 交易日 / 长线 20 交易日窗口 · 完整统计见「推荐中心」</span>
         </div>
         {btLoading && !backtest ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : !backtest ? (
-          <p className="text-sm text-text-muted">暂无回测数据，生成推荐后自动统计。</p>
+          <EmptyState icon="📊" title="暂无回测数据" description="生成推荐并经历评估周期后自动统计胜率与收益。" />
         ) : (
           <div className="space-y-4">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -575,9 +507,9 @@ export default function Ledger() {
           <span className="text-xs text-text-muted">最近 50 笔 · 卖出含已实现盈亏</span>
         </div>
         {historyLoading && history.length === 0 ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : history.length === 0 ? (
-          <p className="text-sm text-text-muted">暂无交易记录。</p>
+          <EmptyState icon="🧾" title="暂无交易记录" description="手动交易或从推荐买入后，记录会显示在这里。" />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

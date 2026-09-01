@@ -145,11 +145,12 @@ export default function KLineChart({ bars, height = 420 }: Props) {
           name: 'K线',
           type: 'candlestick',
           data: klineData,
+          // 涨跌配色统一（涨绿 #52C41A / 跌红 #FF4D4F，与全局一致）
           itemStyle: {
-            color: '#FF4D4F',
-            color0: '#52C41A',
-            borderColor: '#FF4D4F',
-            borderColor0: '#52C41A',
+            color: '#52C41A',
+            color0: '#FF4D4F',
+            borderColor: '#52C41A',
+            borderColor0: '#FF4D4F',
           },
         },
         {

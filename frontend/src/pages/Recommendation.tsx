@@ -4,25 +4,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import Loading from '../components/ui/Loading';
+import EmptyState from '../components/ui/EmptyState';
+import Stat from '../components/ui/Stat';
+import { fmtPct, fmtPrice, num, toList, upDownCls } from '../lib/format';
 import {
   evaluateRecommendations,
   generateRecommendations,
   getRecommendationsHistory,
   getRecommendationsPerformance,
   getTodayRecommendations,
+  parseApiError,
 } from '../services/api';
 import type { BacktestRecentItem, HistoryItem, RecommendItem, TodayRecommendations } from '../services/api';
-
-/** 兼容后端返回数组或 {items:[...]}/{list:[...]} 两种包装 */
-function toList<T>(data: unknown): T[] {
-  if (Array.isArray(data)) return data as T[];
-  if (data && typeof data === 'object') {
-    const d = data as Record<string, unknown>;
-    if (Array.isArray(d.items)) return d.items as T[];
-    if (Array.isArray(d.list)) return d.list as T[];
-  }
-  return [];
-}
 
 const REC_TYPE_LABEL: Record<string, string> = { 短线: '短线', 长线: '长线', short: '短线', long: '长线' };
 
@@ -37,29 +31,6 @@ function riskVariant(risk: string | null | undefined): 'success' | 'info' | 'dan
   if (r.includes('中') || r === 'medium' || r === 'mid') return 'info';
   if (r.includes('高') || r === 'high') return 'danger';
   return 'default';
-}
-
-/** 涨跌配色（A 股惯例：红涨绿跌） */
-function upDownCls(v: number | null | undefined): string {
-  if (v === null || v === undefined || v === 0) return 'text-text';
-  return v > 0 ? 'text-danger' : 'text-success';
-}
-
-/** 价格显示：A 股 2 位、港股 3 位 */
-function fmtPrice(v: number | null | undefined, market?: string): string {
-  if (v === null || v === undefined || Number.isNaN(v)) return '—';
-  return v.toFixed(market === '港股' ? 3 : 2);
-}
-
-/** 比率归一化为百分数：0.667 → 66.7；66.7 → 66.7 */
-function toPercent(v: number | null | undefined): number | null {
-  if (v === null || v === undefined || Number.isNaN(v)) return null;
-  return Math.abs(v) <= 1 ? v * 100 : v;
-}
-
-function fmtPct(v: number | null | undefined, digits = 1): string {
-  const p = toPercent(v);
-  return p === null ? '—' : (p > 0 ? '+' : '') + p.toFixed(digits) + '%';
 }
 
 /** 结果状态 → 徽章 */
@@ -85,15 +56,6 @@ function ConfBar({ value }: { value: number | null | undefined }) {
         <div className={`h-full rounded-full ${color}`} style={{ width: `${v}%` }} />
       </div>
       <span className="text-xs font-number text-text-secondary w-10 text-right tabular-nums">{v.toFixed(0)}%</span>
-    </div>
-  );
-}
-
-function Stat({ label, value, cls = '' }: { label: string; value: string; cls?: string }) {
-  return (
-    <div className="bg-bg-secondary rounded px-3 py-2">
-      <div className="text-xs text-text-secondary">{label}</div>
-      <div className={`text-sm font-number mt-0.5 ${cls}`}>{value}</div>
     </div>
   );
 }
@@ -170,7 +132,7 @@ export default function Recommendation() {
       const d = r.data as TodayRecommendations;
       setToday(Array.isArray(d.items) ? d : null);
     } else {
-      setTodayError('今日推荐获取失败：' + (r.error || '后端不可用'));
+      setTodayError('今日推荐获取失败：' + parseApiError(r.error));
     }
   }, []);
 
@@ -180,7 +142,7 @@ export default function Recommendation() {
     const r = await getRecommendationsPerformance();
     setBacktestLoading(false);
     if (r.ok && r.data) setBacktest(r.data as Record<string, unknown>);
-    else setBacktestError('回测统计获取失败：' + (r.error || '后端不可用'));
+    else setBacktestError('回测统计获取失败：' + parseApiError(r.error));
   }, []);
 
   const loadHistory = useCallback(async () => {
@@ -189,7 +151,7 @@ export default function Recommendation() {
     const r = await getRecommendationsHistory(50);
     setHistoryLoading(false);
     if (r.ok) setHistory(toList<HistoryItem>(r.data));
-    else setHistoryError('历史推荐获取失败：' + (r.error || '后端不可用'));
+    else setHistoryError('历史推荐获取失败：' + parseApiError(r.error));
   }, []);
 
   useEffect(() => {
@@ -213,15 +175,13 @@ export default function Recommendation() {
   const btMonths = useMemo(() => toList<Record<string, unknown>>(backtest?.by_month), [backtest]);
   const btRecent = useMemo(() => toList<BacktestRecentItem>(backtest?.recent), [backtest]);
 
-  const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
-
   const handleGenerate = async () => {
     setGenerating(true);
     setMsg(null);
     const r = await generateRecommendations();
     setGenerating(false);
     if (!r.ok) {
-      setMsg({ type: 'err', text: '生成失败：' + (r.error || '后端不可用') });
+      setMsg({ type: 'err', text: '生成失败：' + parseApiError(r.error) });
       return;
     }
     const d = r.data as TodayRecommendations | undefined;
@@ -247,7 +207,7 @@ export default function Recommendation() {
     const r = await evaluateRecommendations();
     setEvaluating(false);
     if (!r.ok) {
-      setMsg({ type: 'err', text: '结算失败：' + (r.error || '后端不可用') });
+      setMsg({ type: 'err', text: '结算失败：' + parseApiError(r.error) });
       return;
     }
     const d = r.data as { evaluated?: number } | undefined;
@@ -296,9 +256,9 @@ export default function Recommendation() {
           </div>
         )}
         {todayLoading && items.length === 0 ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : items.length === 0 ? (
-          <p className="text-sm text-text-muted">今日暂无推荐，点击右上角「生成今日推荐」开始（每日 09:15 自动生成）。</p>
+          <EmptyState icon="🎯" title="今日暂无推荐" description="点击右上角「生成今日推荐」开始（每个交易日 09:15 自动生成）。" />
         ) : (
           <div className="space-y-4">
             {shortRecs.length > 0 && (
@@ -355,9 +315,9 @@ export default function Recommendation() {
         </div>
         {backtestError && <p className="text-sm text-danger mb-2">{backtestError}</p>}
         {backtestLoading && !backtest ? (
-          <p className="text-sm text-text-muted">统计中...</p>
+          <Loading text="统计中..." />
         ) : !backtest ? (
-          <p className="text-sm text-text-muted">暂无回测数据，生成推荐后自动统计。</p>
+          <EmptyState icon="📊" title="暂无回测数据" description="生成推荐并经历评估周期后自动统计胜率与收益。" />
         ) : (
           <>
             <div className="grid grid-cols-3 lg:grid-cols-6 gap-2 mb-3">
@@ -463,9 +423,9 @@ export default function Recommendation() {
         </h2>
         {historyError && <p className="text-sm text-danger mb-2">{historyError}</p>}
         {historyLoading && history.length === 0 ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : history.length === 0 ? (
-          <p className="text-sm text-text-muted">暂无历史推荐。</p>
+          <EmptyState icon="🗂️" title="暂无历史推荐" description="生成的推荐记录会保存在这里。" />
         ) : (
           <div className="divide-y divide-border">
             {history.map((h) => (

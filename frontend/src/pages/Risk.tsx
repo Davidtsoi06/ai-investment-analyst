@@ -4,10 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import Loading from '../components/ui/Loading';
+import EmptyState from '../components/ui/EmptyState';
 import {
   getMacroOverview,
   getRiskAlerts,
   getRiskOverview,
+  parseApiError,
   refreshMacro,
   runStressTest,
 } from '../services/api';
@@ -264,7 +267,7 @@ export default function Risk() {
     if (seq !== ovSeq.current) return;
     setOvLoading(false);
     if (r.ok) setOverview((r.data as RiskOverview) ?? null);
-    else setOvError('组合风险获取失败：' + (r.error || '后端不可用'));
+    else setOvError('组合风险获取失败：' + parseApiError(r.error));
   }, []);
 
   const loadMacro = useCallback(async () => {
@@ -275,7 +278,7 @@ export default function Risk() {
     if (seq !== macroSeq.current) return;
     setMacroLoading(false);
     if (r.ok) setMacro((r.data as MacroOverview) ?? null);
-    else setMacroError('宏观研判获取失败：' + (r.error || '后端不可用'));
+    else setMacroError('宏观研判获取失败：' + parseApiError(r.error));
   }, []);
 
   const loadAlertLog = useCallback(async () => {
@@ -301,7 +304,7 @@ export default function Risk() {
     const r = await runStressTest(scenario);
     setRunning(null);
     if (!r.ok) {
-      setStressError('压力测试失败：' + (r.error || '后端不可用'));
+      setStressError('压力测试失败：' + parseApiError(r.error));
       return;
     }
     const d = r.data as StressTestResult | undefined;
@@ -318,7 +321,7 @@ export default function Risk() {
     const r = await refreshMacro();
     setRefreshing(false);
     if (!r.ok) {
-      setMacroError('宏观数据刷新失败：' + (r.error || '后端不可用'));
+      setMacroError('宏观数据刷新失败：' + parseApiError(r.error));
       return;
     }
     const d = r.data as MacroOverview | undefined;
@@ -390,9 +393,9 @@ export default function Risk() {
         </div>
         {ovError && <p className="text-sm text-danger mb-2">{ovError}</p>}
         {ovLoading && !overview ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : !overview ? (
-          <p className="text-sm text-text-muted">暂无风险数据。请先在「持仓总览」同步持仓，或确认后端已启动。</p>
+          <EmptyState icon="🛡️" title="暂无风险数据" description="请先在「持仓总览」同步持仓，或确认后端已启动。" />
         ) : (
           <>
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -533,9 +536,9 @@ export default function Risk() {
         </div>
         {macroError && <p className="text-sm text-danger mb-2">{macroError}</p>}
         {macroLoading && !macro ? (
-          <p className="text-sm text-text-muted">加载中（宏观采集约需 10~30 秒）...</p>
+          <Loading text="加载中（宏观采集约需 10~30 秒）..." />
         ) : !macro ? (
-          <p className="text-sm text-text-muted">暂无宏观数据，点击右上角「刷新宏观数据」采集。</p>
+          <EmptyState icon="🌐" title="暂无宏观数据" description="点击右上角「刷新宏观数据」采集全球与中国宏观指标。" />
         ) : (
           <>
             {/* 四色信号横幅 */}
@@ -613,9 +616,9 @@ export default function Risk() {
           </div>
         </div>
         {alertLogLoading && alertLog.length === 0 ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : alertLog.length === 0 ? (
-          <p className="text-sm text-text-muted">暂无风险预警通知。</p>
+          <EmptyState icon="🔕" title="暂无风险预警通知" description="组合指标超限或宏观信号变化时，会在这里生成预警通知。" />
         ) : (
           <div className="divide-y divide-border">
             {alertLog.map((a) => (
@@ -634,5 +637,3 @@ export default function Risk() {
     </div>
   );
 }
-
-

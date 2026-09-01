@@ -17,7 +17,7 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 export default function Button({ variant = 'primary', size = 'md', children, className = '', ...rest }: Props) {
   const sizeCls = size === 'sm' ? 'h-8 px-3 text-xs' : 'h-10 px-4 text-sm';
   return (
-    <button className={`rounded font-medium transition-colors disabled:opacity-50 ${styles[variant]} ${sizeCls} ${className}`} {...rest}>
+    <button className={`rounded font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-300 ${styles[variant]} ${sizeCls} ${className}`} {...rest}>
       {children}
     </button>
   );

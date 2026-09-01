@@ -4,28 +4,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import Loading from '../components/ui/Loading';
+import EmptyState from '../components/ui/EmptyState';
+import { fmtPct, fmtPrice, fmtWan, toList, upDownCls } from '../lib/format';
 import {
   addTracking,
   deleteTracking,
   getTracking,
   getTrackingEvents,
+  parseApiError,
   runTrackingCheck,
   updateTracking,
 } from '../services/api';
 import type { TrackingEvent, TrackingItem } from '../services/api';
 
 const MAX_TRACKING = 10;
-
-/** 兼容后端返回数组或 {items:[...]}/{list:[...]} 两种包装 */
-function toList<T>(data: unknown): T[] {
-  if (Array.isArray(data)) return data as T[];
-  if (data && typeof data === 'object') {
-    const d = data as Record<string, unknown>;
-    if (Array.isArray(d.items)) return d.items as T[];
-    if (Array.isArray(d.list)) return d.list as T[];
-  }
-  return [];
-}
 
 /** 通知级别 → 徽章配色：紧急=danger / 关注=warning / 提示=info */
 function levelVariant(level: string | null | undefined): 'danger' | 'warning' | 'info' | 'default' {
@@ -62,30 +55,6 @@ const EVENT_TYPE_LABEL: Record<string, string> = {
 function eventTypeLabel(t: string | null | undefined): string {
   const key = (t || '').trim();
   return EVENT_TYPE_LABEL[key] || key || '异动';
-}
-
-/** 大单金额：元 → 万（1000000 → 100 万） */
-function fmtWan(v: number | null | undefined): string {
-  if (v === null || v === undefined || Number.isNaN(v)) return '—';
-  const wan = v / 10000;
-  return (Number.isInteger(wan) ? String(wan) : wan.toFixed(1)) + ' 万';
-}
-
-/** 价格显示：A 股 2 位、港股 3 位 */
-function fmtPrice(v: number | null | undefined, market?: string): string {
-  if (v === null || v === undefined || Number.isNaN(v)) return '—';
-  return v.toFixed(market === '港股' ? 3 : 2);
-}
-
-/** 涨跌配色（A 股惯例：红涨绿跌） */
-function upDownCls(v: number | null | undefined): string {
-  if (v === null || v === undefined || v === 0) return 'text-text';
-  return v > 0 ? 'text-danger' : 'text-success';
-}
-
-function fmtPct(v: number | null | undefined, digits = 2): string {
-  if (v === null || v === undefined || Number.isNaN(v)) return '—';
-  return (v > 0 ? '+' : '') + v.toFixed(digits) + '%';
 }
 
 /** 开关徽章 */
@@ -138,7 +107,7 @@ export default function Tracking() {
     if (seq !== listSeq.current) return;
     setListLoading(false);
     if (!r.ok) {
-      setListError('追踪列表获取失败：' + (r.error || '后端不可用'));
+      setListError('追踪列表获取失败：' + parseApiError(r.error));
       return;
     }
     setItems(toList<TrackingItem>(r.data));
@@ -152,7 +121,7 @@ export default function Tracking() {
     if (seq !== eventsSeq.current) return;
     setEventsLoading(false);
     if (!r.ok) {
-      setEventsError('事件记录获取失败：' + (r.error || '后端不可用'));
+      setEventsError('事件记录获取失败：' + parseApiError(r.error));
       return;
     }
     setEvents(toList<TrackingEvent>(r.data));
@@ -217,7 +186,7 @@ export default function Tracking() {
     });
     setSubmitting(false);
     if (!r.ok) {
-      flash('添加失败：' + (r.error || '后端不可用'), 'err');
+      flash('添加失败：' + parseApiError(r.error), 'err');
       return;
     }
     const created = r.data as TrackingItem | undefined;
@@ -233,7 +202,7 @@ export default function Tracking() {
       flash(next === 1 ? '已恢复追踪 ' + (item.name || item.symbol) : '已暂停追踪 ' + (item.name || item.symbol));
       await loadTracking();
     } else {
-      flash('操作失败：' + (r.error || '后端不可用'), 'err');
+      flash('操作失败：' + parseApiError(r.error), 'err');
     }
   };
 
@@ -244,7 +213,7 @@ export default function Tracking() {
       flash('已删除 ' + (item.name || item.symbol));
       await Promise.all([loadTracking(), loadEvents()]);
     } else {
-      flash('删除失败：' + (r.error || '后端不可用'), 'err');
+      flash('删除失败：' + parseApiError(r.error), 'err');
     }
   };
 
@@ -254,7 +223,7 @@ export default function Tracking() {
     const r = await runTrackingCheck();
     setChecking(false);
     if (!r.ok) {
-      flash('手动检测失败：' + (r.error || '后端不可用'), 'err');
+      flash('手动检测失败：' + parseApiError(r.error), 'err');
       return;
     }
     const d = r.data as Record<string, unknown> | undefined;
@@ -364,9 +333,9 @@ export default function Tracking() {
         </div>
         {listError && <p className="text-sm text-danger mb-2">{listError}</p>}
         {listLoading && items.length === 0 ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : items.length === 0 ? (
-          <p className="text-sm text-text-muted">暂无追踪，先在上方添加一只（如 600519 贵州茅台）。</p>
+          <EmptyState icon="📡" title="暂无追踪" description="先在上方添加一只（如 600519 贵州茅台），达到条件自动触发异动通知。" />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {items.map((item) => {
@@ -415,9 +384,9 @@ export default function Tracking() {
         </div>
         {eventsError && <p className="text-sm text-danger mb-2">{eventsError}</p>}
         {eventsLoading && events.length === 0 ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : events.length === 0 ? (
-          <p className="text-sm text-text-muted">暂无异动事件。行情波动达到配置条件时自动触发，也可点击右上角「手动检测」。</p>
+          <EmptyState icon="🔔" title="暂无异动事件" description="行情波动达到配置条件时自动触发，也可点击右上角「手动检测」。" />
         ) : (
           <div className="divide-y divide-border">
             {events.map((ev) => (
@@ -429,7 +398,7 @@ export default function Tracking() {
                 {(ev.price != null || ev.change_pct != null) && (
                   <span className={'text-xs font-number ' + (ev.change_pct ? upDownCls(ev.change_pct) : 'text-text-secondary')}>
                     {ev.price != null ? fmtPrice(ev.price) : ''}
-                    {ev.change_pct != null && ev.change_pct !== 0 ? ' ' + fmtPct(ev.change_pct) : ''}
+                    {ev.change_pct != null && ev.change_pct !== 0 ? ' ' + fmtPct(ev.change_pct, 2) : ''}
                   </span>
                 )}
                 {ev.detail && <span className="text-xs text-text-secondary w-full sm:w-auto sm:flex-1 sm:min-w-40 line-clamp-2">{ev.detail}</span>}

@@ -28,3 +28,21 @@ body {
   color: var(--color-text);
   margin: 0;
 }
+
+/* 选中颜色（对齐理财软件） */
+::selection {
+  background: var(--color-primary-100);
+  color: var(--color-primary-900);
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 链接默认色（对齐理财软件；页面内 Tailwind class 优先） */
+a {
+  color: var(--color-primary-500);
+}
+a:hover {
+  color: var(--color-primary-700);
+}

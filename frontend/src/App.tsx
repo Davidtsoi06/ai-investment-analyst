@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import AppLayout from './layouts/AppLayout';
+import Loading from './components/ui/Loading';
 import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import News from './pages/News';
@@ -26,7 +27,11 @@ export default function App() {
   }, []);
 
   if (onboarded === null) {
-    return <div className="min-h-screen bg-primary-50 flex items-center justify-center text-text-secondary">加载中...</div>;
+    return (
+      <div className="min-h-screen bg-primary-50 flex items-center justify-center">
+        <Loading text="正在连接本地服务..." />
+      </div>
+    );
   }
 
   if (!onboarded) {

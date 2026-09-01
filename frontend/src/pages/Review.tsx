@@ -4,26 +4,19 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import Loading from '../components/ui/Loading';
+import EmptyState from '../components/ui/EmptyState';
+import Stat from '../components/ui/Stat';
+import { fmtMoney, fmtPct, fmtTime, num, toList, upDownCls } from '../lib/format';
 import {
   generateReview,
   getLatestReview,
   getReviewHistory,
+  parseApiError,
   REVIEW_PERIOD_LABEL,
 } from '../services/api';
 import Ledger from './Ledger';
 import type { ReviewBehavior, ReviewPeriod, ReviewReport } from '../services/api';
-
-/** 兼容后端返回数组或 {items:[...]}/{list:[...]} 两种包装 */
-function toList<T>(data: unknown): T[] {
-  if (Array.isArray(data)) return data as T[];
-  if (data && typeof data === 'object') {
-    const d = data as Record<string, unknown>;
-    if (Array.isArray(d.items)) return d.items as T[];
-    if (Array.isArray(d.list)) return d.list as T[];
-    if (Array.isArray(d.reports)) return d.reports as T[];
-  }
-  return [];
-}
 
 const PERIODS: ReviewPeriod[] = ['weekly', 'monthly', 'quarterly'];
 
@@ -46,59 +39,6 @@ function pickStat(stats: Record<string, unknown> | null | undefined, keys: strin
   return null;
 }
 
-/** 数值：数字直接取，字符串转数字 */
-function num(v: unknown): number | null {
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  if (typeof v === 'string' && v.trim() !== '') {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
-/** 金额显示 */
-function fmtMoney(v: number | null): string {
-  if (v === null) return '—';
-  const abs = Math.abs(v);
-  if (abs >= 1e8) return '¥' + (v / 1e8).toFixed(2) + ' 亿';
-  if (abs >= 1e4) return '¥' + (v / 1e4).toFixed(2) + ' 万';
-  return '¥' + v.toFixed(2);
-}
-
-/** 比率归一化为百分数：0.667 → 66.7；66.7 → 66.7 */
-function toPercent(v: number | null | undefined): number | null {
-  if (v === null || v === undefined) return null;
-  return Math.abs(v) <= 1 ? v * 100 : v;
-}
-
-function fmtPct(v: number | null | undefined, digits = 1): string {
-  const p = toPercent(v);
-  return p === null ? '—' : (p > 0 ? '+' : '') + p.toFixed(digits) + '%';
-}
-
-/** 涨跌配色（与虚拟账本 tab 一致：涨绿跌红） */
-function upDownCls(v: number | null | undefined): string {
-  if (v === null || v === undefined || v === 0) return 'text-text';
-  return v > 0 ? 'text-success' : 'text-danger';
-}
-
-/** 时间：created_at "2026-08-31 15:30:05" → "08-31 15:30" */
-function fmtTime(s: string | null | undefined): string {
-  if (!s) return '';
-  // ISO（后端 utc_now，UTC）→ 北京时间；兼容 "2026-08-31 15:30:05" 本地格式
-  if (s.includes('T')) {
-    const d = new Date(s);
-    if (!Number.isNaN(d.getTime())) {
-      const bj = new Date(d.getTime() + 8 * 3600 * 1000);
-      const p = (n: number) => String(n).padStart(2, '0');
-      return p(bj.getMonth() + 1) + '-' + p(bj.getDate()) + ' ' + p(bj.getHours()) + ':' + p(bj.getMinutes());
-    }
-  }
-  const m = /(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/.exec(s);
-  if (m) return m[1].slice(5) + ' ' + m[2];
-  return s.slice(0, 16);
-}
-
 /** 复盘报告 Markdown 分行渲染（标题/分隔线/emoji 着色，参考盘后报告页） */
 function renderContent(content: string, keyPrefix: string) {
   return content.split('\n').map((line, i) => {
@@ -117,15 +57,6 @@ function renderContent(content: string, keyPrefix: string) {
       </p>
     );
   });
-}
-
-function Stat({ label, value, cls = '' }: { label: string; value: string; cls?: string }) {
-  return (
-    <div className="bg-bg-secondary rounded px-3 py-2">
-      <div className="text-xs text-text-secondary">{label}</div>
-      <div className={'text-sm font-number mt-0.5 ' + cls}>{value}</div>
-    </div>
-  );
 }
 
 /** 行为偏差卡片：后端 {name, detected, evidence, suggestion}；兼容 level/score/detail */
@@ -190,7 +121,7 @@ export default function Review() {
     const r = await getReviewHistory(20);
     setHistoryLoading(false);
     if (r.ok) setHistory(toList<ReviewReport>(r.data));
-    else setError('历史复盘获取失败：' + (r.error || '后端不可用'));
+    else setError('历史复盘获取失败：' + parseApiError(r.error));
   }, []);
 
   const loadLatest = useCallback(async (p: ReviewPeriod) => {
@@ -219,7 +150,7 @@ export default function Review() {
     const r = await generateReview(p);
     setGenerating(null);
     if (!r.ok) {
-      flash('生成失败：' + (r.error || '后端不可用'), 'err');
+      flash('生成失败：' + parseApiError(r.error), 'err');
       return;
     }
     const d = r.data as { existing?: boolean; sent?: boolean; reason?: string } | undefined;
@@ -315,11 +246,13 @@ export default function Review() {
         </div>
 
         {latestLoading && !current ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : !current ? (
-          <div className="text-sm text-text-muted">
-            暂无{REVIEW_PERIOD_LABEL[period]}复盘报告。每周日 10:00 / 每月 1 日 10:00 自动生成（月度含推荐准确率报告），也可点击右上角手动生成。
-          </div>
+          <EmptyState
+            icon="🔄"
+            title={'暂无' + REVIEW_PERIOD_LABEL[period] + '复盘报告'}
+            description="每周日 10:00 / 每月 1 日 10:00 自动生成（月度含推荐准确率报告），也可点击右上角手动生成。"
+          />
         ) : (
           <div className="space-y-4">
             {/* 结构化统计：操作盈亏 / 胜率 / 交易次数 / 最佳最差交易 */}
@@ -375,9 +308,9 @@ export default function Review() {
           </div>
         </div>
         {historyLoading && history.length === 0 ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : history.length === 0 ? (
-          <p className="text-sm text-text-muted">暂无历史复盘，生成后自动存档。</p>
+          <EmptyState icon="🗂️" title="暂无历史复盘" description="生成的复盘报告会自动存档在这里，点击条目展开查看。" />
         ) : (
           <div className="divide-y divide-border">
             {history.map((h) => {

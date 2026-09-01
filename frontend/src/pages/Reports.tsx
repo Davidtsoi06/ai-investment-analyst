@@ -4,11 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import Loading from '../components/ui/Loading';
+import EmptyState from '../components/ui/EmptyState';
 import {
   generateDailySummary,
   generateSummary,
   getSummaryHistory,
   getTodaySummary,
+  parseApiError,
 } from '../services/api';
 import type { SummaryReport } from '../services/api';
 
@@ -88,7 +91,7 @@ export default function Reports() {
     if (seq !== todaySeq.current) return;
     setTodayLoading(false);
     if (r.ok) setToday(toList<SummaryReport>(r.data));
-    else setTodayError('今日报告获取失败：' + (r.error || '后端不可用'));
+    else setTodayError('今日报告获取失败：' + parseApiError(r.error));
   }, []);
 
   const loadHistory = useCallback(async () => {
@@ -97,7 +100,7 @@ export default function Reports() {
     const r = await getSummaryHistory(20);
     setHistoryLoading(false);
     if (r.ok) setHistory(toList<SummaryReport>(r.data));
-    else setHistoryError('历史报告获取失败：' + (r.error || '后端不可用'));
+    else setHistoryError('历史报告获取失败：' + parseApiError(r.error));
   }, []);
 
   useEffect(() => {
@@ -125,7 +128,7 @@ export default function Reports() {
     const r = await generateSummary(market);
     setGenerating(null);
     if (!r.ok) {
-      flash('生成失败：' + (r.error || '后端不可用'), 'err');
+      flash('生成失败：' + parseApiError(r.error), 'err');
       return;
     }
     const d = r.data as { existing?: boolean; report?: SummaryReport } | undefined;
@@ -143,7 +146,7 @@ export default function Reports() {
     const r = await generateDailySummary();
     setGenerating(null);
     if (!r.ok) {
-      flash('合并日报生成失败：' + (r.error || '后端不可用'), 'err');
+      flash('合并日报生成失败：' + parseApiError(r.error), 'err');
       return;
     }
     const d = r.data as { existing?: boolean; sent?: boolean; reason?: string } | undefined;
@@ -191,11 +194,13 @@ export default function Reports() {
         </div>
         {todayError && <p className="text-sm text-danger mb-2">{todayError}</p>}
         {todayLoading && today.length === 0 ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : today.length === 0 ? (
-          <p className="text-sm text-text-muted">
-            今日暂无报告。收盘后自动生成（A股 15:30 / 港股 16:30 / 合并日报 17:30），也可点击右上角「生成 A股 总结」「生成港股总结」手动生成。
-          </p>
+          <EmptyState
+            icon="📋"
+            title="今日暂无报告"
+            description="收盘后自动生成（A股 15:30 / 港股 16:30 / 合并日报 17:30），也可点击右上角「生成 A股 总结」「生成港股总结」手动生成。"
+          />
         ) : (
           <div className="space-y-4">
             {todayDaily.map((r) => (
@@ -235,9 +240,9 @@ export default function Reports() {
         </div>
         {historyError && <p className="text-sm text-danger mb-2">{historyError}</p>}
         {historyLoading && history.length === 0 ? (
-          <p className="text-sm text-text-muted">加载中...</p>
+          <Loading />
         ) : history.length === 0 ? (
-          <p className="text-sm text-text-muted">暂无历史报告，生成后自动存档。</p>
+          <EmptyState icon="🗂️" title="暂无历史报告" description="生成的报告会自动存档在这里，点击条目展开查看。" />
         ) : (
           <div className="divide-y divide-border">
             {history.map((h) => {
