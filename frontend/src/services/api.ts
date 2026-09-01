@@ -410,4 +410,118 @@ export const getChatHistory = (limit = 30) => api<ChatHistoryItem[]>('GET', '/ap
 export const getResearchList = (keyword = '', limit = 10) =>
   api<ResearchItem[]>('GET', `/api/research/list?keyword=${encodeURIComponent(keyword)}&limit=${limit}`);
 export const interpretResearch = (keyword: string) => api<ResearchInterpret>('POST', '/api/research/interpret', { keyword });
+// ---- 风险分析与宏观研判（S14，契约与后端 /api/risk/*、/api/macro/* 对齐） ----
+/** 预警项：{indicator, value, threshold, level}；indicator 可能是英文键或中文名 */
+export interface RiskAlert {
+  indicator?: string | null;
+  value?: number | string | null;
+  threshold?: number | string | null;
+  /** 预警 / 关注 / 紧急 等 */
+  level?: string | null;
+  [k: string]: unknown;
+}
+
+/** 单只集中度明细项 */
+export interface RiskConcentrationItem {
+  symbol?: string;
+  name?: string;
+  market?: string;
+  /** 集中度权重（小数或百分数均可） */
+  weight_pct?: number | null;
+  value?: number | null;
+  [k: string]: unknown;
+}
+
+export interface RiskIndicators {
+  /** 单只最大集中度（%） */
+  concentration_max?: number | null;
+  concentration_detail?: RiskConcentrationItem[] | null;
+  /** 最高市场（A股/港股）占比（%） */
+  market_share?: number | null;
+  /** 最大回撤（%） */
+  max_drawdown?: number | null;
+  beta?: number | null;
+  sharpe?: number | null;
+  /** VaR 95% 日损失金额 */
+  var?: number | null;
+  [k: string]: unknown;
+}
+
+/** GET /api/risk/overview：组合风险指标 + 预警 */
+export interface RiskOverview {
+  total_value?: number;
+  indicators?: RiskIndicators | null;
+  alerts?: RiskAlert[] | null;
+  updated_at?: string | null;
+  error?: string;
+  [k: string]: unknown;
+}
+
+/** 压力测试场景（契约与后端一致） */
+export type StressScenario = 'market_down_10' | 'hk_tech_down_20' | 'cny_depreciate_5';
+
+/** POST /api/risk/stress-test 结果 */
+export interface StressTestResult {
+  scenario?: string;
+  /** 估算损失金额（元） */
+  estimated_loss?: number;
+  /** 估算损失占比（%） */
+  estimated_loss_pct?: number;
+  /** 明细：字符串 / 对象 / 数组 / null */
+  detail?: string | Record<string, unknown> | unknown[] | null;
+  error?: string;
+  [k: string]: unknown;
+}
+
+/** 宏观信号级别（四色） */
+export type MacroSignalLevel = 'green' | 'yellow' | 'red' | 'black';
+
+/** 信号因子：{name, value, note} */
+export interface MacroFactor {
+  name?: string;
+  value?: number | string | null;
+  note?: string | null;
+  [k: string]: unknown;
+}
+
+/** 宏观指标：{indicator|name, region, value, date, source} */
+export interface MacroIndicator {
+  indicator?: string;
+  name?: string;
+  region?: string;
+  value?: number | string | null;
+  date?: string | null;
+  source?: string | null;
+  [k: string]: unknown;
+}
+
+/** GET /api/macro/overview：信号（level 或 signal 字段，兼容 emoji） + 指标列表 */
+export interface MacroOverview {
+  /** 信号级别：green/yellow/red/black（后端可能放 level，或 signal 为 emoji） */
+  level?: string;
+  signal?: string;
+  factors?: MacroFactor[] | null;
+  indicators?: MacroIndicator[] | null;
+  updated_at?: string | null;
+  error?: string;
+  [k: string]: unknown;
+}
+
+/** GET /api/risk/alerts：最近风险预警通知（notification_log type='risk'） */
+export interface RiskAlertLog {
+  id?: number;
+  type?: string;
+  title?: string;
+  content?: string;
+  level?: string;
+  created_at?: string;
+  [k: string]: unknown;
+}
+
+export const getRiskOverview = () => api<RiskOverview>('GET', '/api/risk/overview');
+export const runStressTest = (scenario: StressScenario) => api<StressTestResult>('POST', '/api/risk/stress-test', { scenario });
+export const getMacroOverview = () => api<MacroOverview>('GET', '/api/macro/overview');
+export const refreshMacro = () => api<MacroOverview>('POST', '/api/macro/refresh');
+export const getRiskAlerts = (limit = 10) => api<RiskAlertLog[]>('GET', '/api/risk/alerts?limit=' + limit);
+
 

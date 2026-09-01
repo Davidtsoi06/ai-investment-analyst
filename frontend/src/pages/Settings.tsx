@@ -138,7 +138,7 @@ export default function Settings() {
 
       <Card>
         <h2 className="font-bold mb-2 text-sm">关于</h2>
-        <p className="text-xs text-text-secondary">AI 投资分析软件 v0.4.0 · 本地运行 · 数据安全 · 投资建议仅供参考</p>
+        <p className="text-xs text-text-secondary">AI 投资分析软件 v0.5.0 · 本地运行 · 数据安全 · 投资建议仅供参考</p>
       </Card>
     </div>
   );
