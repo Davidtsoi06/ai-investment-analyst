@@ -76,6 +76,7 @@ class FinanceSnapshot:
     accounts: list = field(default_factory=list)
     transactions: list = field(default_factory=list)
     net_worth: dict = field(default_factory=dict)
+    net_worth_history: list = field(default_factory=list)  # 净值历史（近 180 天）
     synced_at: str = ''
 
     def to_dict(self) -> dict:
@@ -120,11 +121,13 @@ def read_snapshot_json() -> FinanceSnapshot | None:
     ]
     transactions = data.get('transactions') or []
     net_worth = data.get('netWorth') or {}
+    net_worth_history = data.get('netWorthHistory') or []
     return FinanceSnapshot(
         holdings=holdings,
         accounts=accounts,
         transactions=transactions,
         net_worth=net_worth,
+        net_worth_history=net_worth_history,
         synced_at=data.get('exportedAt') or datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     )
 
@@ -165,11 +168,17 @@ def read_snapshot_db() -> FinanceSnapshot | None:
             for r in conn.execute('SELECT * FROM transactions ORDER BY date DESC LIMIT 300')
         ]
         nw = conn.execute('SELECT * FROM net_worth_history ORDER BY date DESC LIMIT 1').fetchone()
+        nw_history = [
+            dict(r) for r in conn.execute(
+                'SELECT date, total_cash, total_investments, net_worth FROM net_worth_history ORDER BY date DESC LIMIT 180'
+            )
+        ]
         return FinanceSnapshot(
             holdings=holdings,
             accounts=accounts,
             transactions=transactions,
             net_worth=dict(nw) if nw else {},
+            net_worth_history=nw_history,
             synced_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         )
     finally:
@@ -187,5 +196,6 @@ def read_snapshot() -> FinanceSnapshot | None:
                 snap.accounts = db_snap.accounts
                 snap.transactions = db_snap.transactions
                 snap.net_worth = db_snap.net_worth
+                snap.net_worth_history = db_snap.net_worth_history
         return snap
     return read_snapshot_db()

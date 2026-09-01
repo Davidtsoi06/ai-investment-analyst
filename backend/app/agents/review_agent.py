@@ -136,18 +136,25 @@ def _load_transactions(period_start: str, period_end: str) -> list[dict]:
     raw = snapshot.get('transactions') or []
     asset_map = _asset_map()
 
-    # 区间内交易（date 为 YYYY-MM-DD）
+    # 区间内交易（date 为 YYYY-MM-DD）；快照新格式自带 assetCode/assetName（不依赖 finance.db）
     items: list[dict] = []
     for t in raw:
         d = str(t.get('date') or '')[:10]
         if not (period_start <= d <= period_end):
             continue
-        asset = asset_map.get(int(t.get('asset_id') or 0)) or {}
+        code = t.get('assetCode') or t.get('asset_code') or ''
+        name = t.get('assetName') or t.get('asset_name') or ''
+        market = t.get('market') or ''
+        if not code and not name:
+            asset = asset_map.get(int(t.get('asset_id') or 0)) or {}
+            code = asset.get('code') or ''
+            name = asset.get('name') or ''
+            market = asset.get('market') or ''
         items.append({
             'asset_id': t.get('asset_id'),
-            'symbol': asset.get('code') or '',
-            'name': asset.get('name') or '',
-            'market': asset.get('market') or '',
+            'symbol': code,
+            'name': name,
+            'market': market,
             'type': t.get('type'),
             'quantity': float(t.get('quantity') or 0),
             'price': float(t.get('price') or 0),
@@ -201,48 +208,70 @@ def _load_tracking_events(period_start: str, period_end: str) -> int:
 
 
 def _load_net_worth(period_start: str) -> dict:
-    """净值：finance.db net_worth_history 只读（区间初 vs 最新）；失败降级快照最新净值"""
+    """净值：优先快照净值历史（180 天，理财软件导出），其次 finance.db；最后降级最新值"""
     result: dict = {'latest': None, 'start': None, 'change_pct': None}
+
+    def _from_history(history: list) -> None:
+        items = []
+        for h in history:
+            try:
+                d = str(h.get('date') or '')[:10]
+                v = float(h.get('netWorth') or h.get('net_worth') or 0)
+                if d and v > 0:
+                    items.append((d, v))
+            except (TypeError, ValueError):
+                continue
+        items.sort(key=lambda x: x[0])
+        if not items:
+            return
+        result['latest'] = round(items[-1][1], 2)
+        for d, v in items:
+            if d >= period_start:
+                result['start'] = round(v, 2)
+                break
+        if result['start'] is None:
+            result['start'] = round(items[0][1], 2)
+        if result['latest'] and result['start'] and float(result['start']) > 0:
+            result['change_pct'] = round((float(result['latest']) / float(result['start']) - 1) * 100, 2)
+
+    snap_row = None
+    conn = get_connection()
     try:
-        from ..data_sources.portfolio_app import _readonly_conn, detect_db
-        path = detect_db()
-        if path is not None:
-            conn = _readonly_conn(path)
-            try:
-                latest = conn.execute(
-                    'SELECT date, net_worth FROM net_worth_history ORDER BY date DESC LIMIT 1'
-                ).fetchone()
-                start = conn.execute(
-                    'SELECT date, net_worth FROM net_worth_history WHERE date >= ? '
-                    'ORDER BY date ASC LIMIT 1', (period_start,)
-                ).fetchone()
-            finally:
-                conn.close()
-            if latest:
-                result['latest'] = round(float(latest['net_worth']), 2)
-            if start:
-                result['start'] = round(float(start['net_worth']), 2)
-            if result['latest'] and result['start'] and float(result['start']) > 0:
-                result['change_pct'] = round(
-                    (float(result['latest']) / float(result['start']) - 1) * 100, 2)
-    except Exception as e:  # noqa: BLE001
-        logger.warning('净值历史读取失败: %s', str(e)[:100])
-    if result['latest'] is None:
-        # 降级：快照最新净值
-        conn = get_connection()
+        snap_row = conn.execute(
+            "SELECT value FROM system_settings WHERE key = 'portfolio_snapshot_v1'"
+        ).fetchone()
+    finally:
+        conn.close()
+    if snap_row:
         try:
-            row = conn.execute(
-                "SELECT value FROM system_settings WHERE key = 'portfolio_snapshot_v1'"
-            ).fetchone()
-        finally:
-            conn.close()
-        if row:
-            try:
-                nw = json.loads(row['value']).get('net_worth') or {}
-                if nw.get('net_worth'):
-                    result['latest'] = round(float(nw['net_worth']), 2)
-            except (ValueError, TypeError):
-                pass
+            snap = json.loads(snap_row['value'])
+            _from_history(snap.get('net_worth_history') or [])
+        except (ValueError, TypeError):
+            pass
+    if result['latest'] is None:
+        try:
+            from ..data_sources.portfolio_app import _readonly_conn, detect_db
+            path = detect_db()
+            if path is not None:
+                conn = _readonly_conn(path)
+                try:
+                    history = [
+                        dict(r) for r in conn.execute(
+                            'SELECT date, net_worth FROM net_worth_history ORDER BY date DESC LIMIT 180'
+                        )
+                    ]
+                finally:
+                    conn.close()
+                _from_history(history)
+        except Exception as e:  # noqa: BLE001
+            logger.warning('净值历史读取失败: %s', str(e)[:100])
+    if result['latest'] is None and snap_row:
+        try:
+            nw = json.loads(snap_row['value']).get('net_worth') or {}
+            if nw.get('netWorth') or nw.get('net_worth'):
+                result['latest'] = round(float(nw.get('netWorth') or nw.get('net_worth')), 2)
+        except (ValueError, TypeError):
+            pass
     return result
 
 
