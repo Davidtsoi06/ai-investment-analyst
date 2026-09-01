@@ -333,6 +333,37 @@ def _notify(items: list[dict], source: str) -> None:
         logger.warning('推荐通知发送失败: %s', str(e)[:100])
 
 
+def _macro_constraint(entries: list[dict]) -> tuple[list[dict], list[dict]]:
+    """S14 宏观信号约束：🔴 暂停短线推荐；⚫ 暂停全部买入。
+    无信号 / 🟢 / 🟡 不拦截，不破坏现有推荐流程。"""
+    from ..services.settings_service import get_setting
+    signal = get_setting('macro_signal') or {}
+    level = signal.get('level')
+    if level not in ('red', 'black'):
+        return entries, []
+    signal_text = signal.get('signal', level)
+    blocked: list[dict] = []
+    passed: list[dict] = []
+    for e in entries:
+        if level == 'black':
+            blocked.append({
+                'symbol': e.get('symbol'), 'name': e.get('name'),
+                'rec_type': e.get('rec_type'),
+                'reasons': [f'宏观信号 {signal_text}：系统性风险，暂停全部买入'],
+            })
+        elif level == 'red' and e.get('rec_type') == '短线':
+            blocked.append({
+                'symbol': e.get('symbol'), 'name': e.get('name'),
+                'rec_type': e.get('rec_type'),
+                'reasons': [f'宏观信号 {signal_text}：风险偏高，暂停短线推荐'],
+            })
+        else:
+            passed.append(e)
+    if blocked:
+        logger.info('宏观信号 %s 拦截推荐 %d 条', signal_text, len(blocked))
+    return passed, blocked
+
+
 def generate_recommendations(force: bool = False) -> dict:
     """生成当日推荐。force=False 且当日已有推荐时直接返回缓存结果。
 
@@ -399,6 +430,12 @@ def generate_recommendations(force: bool = False) -> dict:
 
     # 3) 约束过滤
     result = apply_constraints(merged, profile, holdings)
+
+    # 4) 宏观信号约束（S14）：🔴 暂停短线 / ⚫ 暂停全部买入
+    macro_passed, macro_blocked = _macro_constraint(result['passed'])
+    result['passed'] = macro_passed
+    result['blocked'] = result['blocked'] + macro_blocked
+
     saved = _save_entries(result['passed'], today) if result['passed'] else 0
     if saved:
         _notify(result['passed'], source)

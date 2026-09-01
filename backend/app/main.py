@@ -806,3 +806,58 @@ def research_interpret_api(
         raise HTTPException(status_code=500, detail=f'研报解读失败: {e}')
 
 
+# ---------------- 风险分析与宏观研判（S14） ----------------
+
+from .services.risk_service import (  # noqa: E402
+    compute_risk_overview as _risk_overview,
+    list_risk_alerts as _risk_alerts,
+    stress_test as _risk_stress_test,
+)
+from .agents.macro_agent import (  # noqa: E402
+    get_macro_overview as _macro_overview,
+    refresh_macro as _macro_refresh,
+)
+
+
+class StressTestIn(BaseModel):
+    scenario: str
+
+
+@app.get("/api/risk/overview")
+def risk_overview_api(x_backend_token: str = Header(default="")):
+    """组合风险总览：集中度 / 最大回撤 / Beta / 夏普 / VaR + 预警（命中预警自动通知，30 分钟冷却）"""
+    require_token(x_backend_token)
+    return _risk_overview(notify=True)
+
+
+@app.post("/api/risk/stress-test")
+def risk_stress_test_api(data: StressTestIn, x_backend_token: str = Header(default="")):
+    """压力测试：scenario = market_down_10 | hk_tech_down_20 | cny_depreciate_5"""
+    require_token(x_backend_token)
+    try:
+        return _risk_stress_test((data.scenario or '').strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/risk/alerts")
+def risk_alerts_api(limit: int = Query(20, ge=1, le=100), x_backend_token: str = Header(default="")):
+    """最近风险预警通知（notification_log type='risk'）"""
+    require_token(x_backend_token)
+    return _risk_alerts(limit)
+
+
+@app.get("/api/macro/overview")
+def macro_overview_api(x_backend_token: str = Header(default="")):
+    """宏观总览：全球/中国指标列表 + 四色信号（当日已有缓存直接返回）"""
+    require_token(x_backend_token)
+    return _macro_overview(refresh=False)
+
+
+@app.post("/api/macro/refresh")
+def macro_refresh_api(x_backend_token: str = Header(default="")):
+    """强制重新采集宏观指标并更新四色信号（幂等）"""
+    require_token(x_backend_token)
+    return _macro_refresh()
+
+
