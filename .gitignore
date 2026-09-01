@@ -6,6 +6,7 @@ dist/
 release/
 build/
 out/
+desktop/backend-bin/
 *.exe
 *.msi
 
