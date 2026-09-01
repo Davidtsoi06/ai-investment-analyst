@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    name: 构建安装包并发布 Release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: npm ci
+
+      - name: 构建前端
+        working-directory: frontend
+        run: npx vite build
+
+      - name: 安装后端依赖
+        working-directory: backend
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: 打包后端为单文件 exe
+        working-directory: backend
+        run: pyinstaller --onefile --name ai-invest-backend --distpath ../desktop/backend-bin --workpath ../.cache/pyi-build --specpath ../.cache/pyi-spec --paths . --hidden-import app.main --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan.on --hidden-import uvicorn.lifespan.off --clean run.py
+
+      - name: 复制前端产物到 desktop
+        working-directory: desktop
+        run: node scripts/copy-frontend.mjs
+
+      - name: 安装 desktop 依赖
+        working-directory: desktop
+        run: npm ci
+
+      - name: 编译 TS 并打包 NSIS 安装包（自动发布 Release）
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx tsc -p tsconfig.json && npx electron-builder --win nsis --publish always
