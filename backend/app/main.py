@@ -31,6 +31,7 @@ async def lifespan(_app: FastAPI):
     start_tracking_polling()
     register_summary_jobs()
     catchup_summaries()
+    register_review_jobs()
     logger.info("数据库初始化完成: %s", settings.db_path)
     yield
     stop_scheduler()
@@ -854,10 +855,193 @@ def macro_overview_api(x_backend_token: str = Header(default="")):
     return _macro_overview(refresh=False)
 
 
+@app.get("/api/macro/overview")
+def macro_overview_api(x_backend_token: str = Header(default="")):
+    """宏观总览：全球/中国指标列表 + 四色信号（当日已有缓存直接返回）"""
+    require_token(x_backend_token)
+    return _macro_overview(refresh=False)
+
+
 @app.post("/api/macro/refresh")
 def macro_refresh_api(x_backend_token: str = Header(default="")):
     """强制重新采集宏观指标并更新四色信号（幂等）"""
     require_token(x_backend_token)
     return _macro_refresh()
+
+
+# ---------------- 投资复盘（S15） ----------------
+
+from .agents.review_agent import (  # noqa: E402
+    generate_review as _review_generate,
+    get_latest_review as _review_latest,
+    get_latest_review_of as _review_latest_of,
+    list_reviews as _review_history,
+)
+
+VALID_REVIEW_PERIODS = ('weekly', 'monthly', 'quarterly')
+# 前端别名兼容：week->weekly / month->monthly / quarter->quarterly
+PERIOD_ALIAS = {'week': 'weekly', 'month': 'monthly', 'quarter': 'quarterly'}
+
+
+def _normalize_period(period: str) -> str:
+    p = (period or 'weekly').strip().lower()
+    p = PERIOD_ALIAS.get(p, p)
+    if p not in VALID_REVIEW_PERIODS:
+        raise HTTPException(status_code=400, detail='period 仅支持 weekly / monthly / quarterly（别名 week/month/quarter）')
+    return p
+
+
+@app.get("/api/review/generate")
+def review_generate_api(
+    period: str = Query('weekly', description='weekly/monthly/quarterly'),
+    x_backend_token: str = Header(default=""),
+):
+    """生成并推送周期复盘报告；当日同周期已生成返回 existing=true（幂等）。
+    返回 {ok, existing, period, period_start, period_end, report, error?}"""
+    require_token(x_backend_token)
+    p = _normalize_period(period)
+    try:
+        result = _review_generate(p, force=False)
+    except Exception as e:  # noqa: BLE001
+        logger.exception('复盘生成失败')
+        return {'ok': False, 'existing': False, 'period': p,
+                'period_start': None, 'period_end': None, 'report': None, 'sent': False,
+                'error': f'生成失败: {e}'}
+    cached = bool(result.get('cached'))
+    return {'ok': result.get('ok'), 'existing': cached, 'period': p,
+            'period_start': result.get('period_start'), 'period_end': result.get('period_end'),
+            'report': result.get('report'), 'sent': not cached, 'error': result.get('reason')}
+
+
+@app.get("/api/review/latest")
+def review_latest_api(
+    period: str | None = Query(None, description='可选：weekly/monthly/quarterly（返回该周期最近一份）'),
+    x_backend_token: str = Header(default=""),
+):
+    """最新复盘报告；带 period 时返回该周期最近一份（不存在返回 exists=false）"""
+    require_token(x_backend_token)
+    if period:
+        p = _normalize_period(period)
+        report = _review_latest_of(p)
+    else:
+        report = _review_latest()
+    if report is None:
+        return {'exists': False, 'report': None, 'reason': '暂无复盘报告'}
+    return {'exists': True, 'report': report}
+
+
+@app.get("/api/review/history")
+def review_history_api(limit: int = Query(20, ge=1, le=100), x_backend_token: str = Header(default="")):
+    """复盘报告历史（按时间倒序）"""
+    require_token(x_backend_token)
+    return _review_history(limit)
+
+
+def register_review_jobs() -> None:
+    """注册复盘定时任务：每周日 10:00 周度复盘 / 每月 1 日 10:00 月度复盘（季度手动触发）"""
+    from .services.scheduler import add_cron_job
+
+    def _weekly_job() -> None:
+        try:
+            _review_generate('weekly', force=False)
+        except Exception as e:  # noqa: BLE001
+            logger.error('定时周度复盘失败: %s', e)
+
+    def _monthly_job() -> None:
+        try:
+            _review_generate('monthly', force=False)
+        except Exception as e:  # noqa: BLE001
+            logger.error('定时月度复盘失败: %s', e)
+
+    add_cron_job(_weekly_job, hour=10, minute=0, job_id='review_weekly', day_of_week='sun')
+    add_cron_job(_monthly_job, hour=10, minute=0, job_id='review_monthly', day=1)
+    logger.info('复盘定时任务已注册（周日 10:00 周度 / 每月1日 10:00 月度）')
+
+
+# ---------------- 虚拟账本（S15） ----------------
+
+from .services.paper_trading import (  # noqa: E402
+    init_account as _pt_init,
+    trade as _pt_trade,
+    portfolio as _pt_portfolio,
+    history as _pt_history,
+    trade_from_recommendation as _pt_from_rec,
+)
+
+
+class PaperAccountIn(BaseModel):
+    initial_cash: float | None = None
+
+
+class PaperTradeIn(BaseModel):
+    symbol: str
+    market: str = 'A股'
+    type: str = ''
+    side: str | None = None  # 前端兼容别名：type 与 side 二选一
+    quantity: float = 100
+
+
+class PaperFromRecIn(BaseModel):
+    recommendation_id: int
+
+
+def _paper_error(e: Exception) -> HTTPException:
+    """虚拟账本错误映射：ValueError -> 400（余额不足/持仓不足/行情失败/市场未开启等）"""
+    return HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/paper/account")
+def paper_account_init(data: PaperAccountIn | None = None, x_backend_token: str = Header(default="")):
+    """初始化虚拟账户（默认余额=画像投资金额中值；可传 initial_cash 覆盖）；已存在返回现有账户"""
+    require_token(x_backend_token)
+    return _pt_init(data.initial_cash if data else None)
+
+
+@app.get("/api/paper/account")
+def paper_account_get(x_backend_token: str = Header(default="")):
+    """查询虚拟账户：{opened: bool, account: {...} | None}"""
+    require_token(x_backend_token)
+    from .services.paper_trading import get_account as _pt_get_account
+    account = _pt_get_account()
+    if account is None:
+        return {'opened': False, 'account': None}
+    return {'opened': True, 'account': account}
+
+
+@app.post("/api/paper/trade")
+def paper_trade_api(data: PaperTradeIn, x_backend_token: str = Header(default="")):
+    """模拟交易：{symbol, market, type: buy|sell, quantity}（type 与 side 二选一）
+    成交价=实时现价；买入校验余额与市场；卖出校验持仓并记 pnl（均价成本）"""
+    require_token(x_backend_token)
+    trade_type = data.type or data.side or ''
+    try:
+        return _pt_trade(data.symbol, data.market, trade_type, data.quantity)
+    except ValueError as e:
+        raise _paper_error(e)
+
+
+@app.get("/api/paper/portfolio")
+def paper_portfolio_api(x_backend_token: str = Header(default="")):
+    """余额 + 持仓列表（symbol/name/quantity/avg_cost/现价/市值/浮动盈亏）+ 总资产"""
+    require_token(x_backend_token)
+    return _pt_portfolio()
+
+
+@app.get("/api/paper/history")
+def paper_history_api(limit: int = Query(50, ge=1, le=200), x_backend_token: str = Header(default="")):
+    """虚拟账本交易历史（时间倒序）"""
+    require_token(x_backend_token)
+    return _pt_history(limit)
+
+
+@app.post("/api/paper/trade-from-recommendation")
+def paper_trade_from_rec_api(data: PaperFromRecIn, x_backend_token: str = Header(default="")):
+    """一键从推荐买入：按推荐 symbol/entry 中值价买入 1 手（无推荐/余额不足优雅失败，不崩溃）"""
+    require_token(x_backend_token)
+    try:
+        return _pt_from_rec(data.recommendation_id)
+    except ValueError as e:
+        raise _paper_error(e)
+
 
 

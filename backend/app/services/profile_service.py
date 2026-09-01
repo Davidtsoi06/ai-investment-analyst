@@ -31,6 +31,21 @@ def get_profile() -> dict:
     return profile
 
 
+# 投资金额档位 -> 中值（元）：10万以下→5万、10-50万→30万、50-100万→75万、100万以上→150万
+INVEST_AMOUNT_MID = {
+    '10万以下': 50000,
+    '10-50万': 300000,
+    '50-100万': 750000,
+    '100万以上': 1500000,
+}
+
+
+def invest_amount_mid() -> float:
+    """画像投资金额档位对应的中值金额（元）；未识别档位默认 30 万"""
+    profile = get_profile()
+    return INVEST_AMOUNT_MID.get((profile.get('invest_amount') or '').strip(), 300000)
+
+
 def save_profile(data: dict) -> dict:
     """保存画像并标记引导完成"""
     now = utc_now()

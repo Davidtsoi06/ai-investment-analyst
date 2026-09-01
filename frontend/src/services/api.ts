@@ -524,4 +524,185 @@ export const getMacroOverview = () => api<MacroOverview>('GET', '/api/macro/over
 export const refreshMacro = () => api<MacroOverview>('POST', '/api/macro/refresh');
 export const getRiskAlerts = (limit = 10) => api<RiskAlertLog[]>('GET', '/api/risk/alerts?limit=' + limit);
 
+// ---- 投资复盘（S15，契约与后端 /api/review/* 对齐） ----
+export type ReviewPeriod = 'weekly' | 'monthly' | 'quarterly';
 
+export const REVIEW_PERIOD_LABEL: Record<string, string> = {
+  weekly: '周度',
+  monthly: '月度',
+  quarterly: '季度',
+};
+
+/** 行为偏差条目（追涨杀跌/过度交易/处置效应/确认偏差/锚定效应）
+ * 后端结构：{name, detected, evidence, suggestion}；兼容 level/score/detail 旧写法 */
+export interface ReviewBehavior {
+  name?: string;
+  /** 是否检出该偏差（后端主格式） */
+  detected?: boolean;
+  /** 检出证据（后端主格式） */
+  evidence?: string;
+  suggestion?: string;
+  /** 兼容写法：明显/一般/轻微/无 */
+  level?: string;
+  /** 兼容写法：0-1 或 0-100 得分 */
+  score?: number | null;
+  /** 兼容写法 */
+  detail?: string;
+  [k: string]: unknown;
+}
+
+export interface ReviewReport {
+  id: number;
+  /** weekly / monthly / quarterly */
+  period: string;
+  period_start?: string | null;
+  period_end?: string | null;
+  /** Markdown 文本：操作盈亏/胜率/行为偏差分析等 */
+  content: string;
+  /** 结构化统计（后端可选返回；默认嵌入 content） */
+  stats?: Record<string, unknown> | null;
+  behaviors?: unknown[] | null;
+  ai_used?: number | null;
+  sent?: number | null;
+  created_at: string;
+}
+
+/** GET /api/review/generate?period= 返回 {ok, existing, period, period_start, period_end, report, error?} */
+export interface ReviewGenerateResult {
+  ok?: boolean;
+  /** true = 当日同周期已生成（幂等） */
+  existing?: boolean;
+  period?: string;
+  period_start?: string | null;
+  period_end?: string | null;
+  report?: ReviewReport | null;
+  error?: string;
+}
+
+/** GET /api/review/latest?period= 返回 {exists, report?, reason?}；period 缺省返回最新一份 */
+export interface ReviewLatestResult {
+  exists: boolean;
+  report?: ReviewReport | null;
+  reason?: string;
+}
+
+export const getReviewHistory = (limit = 20) =>
+  api<ReviewReport[]>('GET', '/api/review/history?limit=' + limit);
+export const generateReview = (period: ReviewPeriod) =>
+  api<ReviewGenerateResult>('GET', '/api/review/generate?period=' + period);
+export const getLatestReview = (period?: ReviewPeriod) =>
+  api<ReviewLatestResult>('GET', '/api/review/latest' + (period ? '?period=' + period : ''));
+/** 别名：getLatestReview */
+export const getReviewLatest = getLatestReview;
+
+// ---- 虚拟账本（S15，契约与后端 /api/paper/* 对齐） ----
+export interface PaperAccount {
+  id?: number;
+  /** 当前余额（元） */
+  balance?: number | null;
+  /** 初始虚拟资金 */
+  initial_balance?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  [k: string]: unknown;
+}
+
+export interface PaperPosition {
+  symbol: string;
+  name?: string | null;
+  market?: string;
+  quantity: number;
+  /** 均价成本 */
+  avg_cost?: number | null;
+  /** 现价（行情失败为 null） */
+  price?: number | null;
+  market_value?: number | null;
+  pnl?: number | null;
+  pnl_pct?: number | null;
+  [k: string]: unknown;
+}
+
+/** GET /api/paper/portfolio：余额 + 持仓列表 + 总资产（未开户 ok=false） */
+export interface PaperPortfolio {
+  ok?: boolean;
+  reason?: string;
+  balance?: number | null;
+  positions?: PaperPosition[];
+  total_assets?: number | null;
+  [k: string]: unknown;
+}
+
+/** POST /api/paper/trade 与 /api/paper/trade-from-recommendation 结果 */
+export interface PaperTradeResult {
+  ok?: boolean;
+  type?: string; // buy / sell
+  symbol?: string;
+  name?: string | null;
+  market?: string;
+  quantity?: number;
+  price?: number;
+  amount?: number;
+  balance?: number;
+  pnl?: number | null;
+  avg_cost?: number | null;
+  reason?: string;
+  recommendation_id?: number | null;
+  [k: string]: unknown;
+}
+
+export interface PaperHistoryItem {
+  id: number;
+  symbol: string;
+  name?: string | null;
+  market?: string;
+  /** buy / sell */
+  type: string;
+  quantity: number;
+  price?: number | null;
+  amount?: number | null;
+  /** open（持仓中买入）/ closed */
+  status?: string;
+  pnl?: number | null;
+  /** 一键从推荐买入时携带推荐 id，手动交易为 null */
+  recommendation_id?: number | null;
+  opened_at?: string | null;
+  closed_at?: string | null;
+  [k: string]: unknown;
+}
+
+export const initPaperAccount = (initialCash?: number) =>
+  api<{ ok?: boolean; existing?: boolean; account?: PaperAccount }>(
+    'POST',
+    '/api/paper/account',
+    initialCash !== undefined && initialCash > 0 ? { initial_cash: initialCash } : {},
+  );
+/** 别名：initPaperAccount */
+export const openPaperAccount = initPaperAccount;
+
+/** GET /api/paper/account：{opened: bool, account: {...}|null} */
+export interface PaperAccountState {
+  opened: boolean;
+  account?: PaperAccount | null;
+  reason?: string;
+  [k: string]: unknown;
+}
+export const getPaperAccount = () => api<PaperAccountState>('GET', '/api/paper/account');
+export const getPaperPortfolio = () => api<PaperPortfolio>('GET', '/api/paper/portfolio');
+export const paperTrade = (input: { symbol: string; market: string; type: 'buy' | 'sell'; quantity: number }) =>
+  api<PaperTradeResult>('POST', '/api/paper/trade', input);
+export const tradeFromRecommendation = (recommendation_id: number) =>
+  api<PaperTradeResult>('POST', '/api/paper/trade-from-recommendation', { recommendation_id });
+/** 别名：tradeFromRecommendation */
+export const paperTradeFromRecommendation = tradeFromRecommendation;
+export const getPaperHistory = (limit = 50) =>
+  api<PaperHistoryItem[]>('GET', '/api/paper/history?limit=' + limit);
+
+/** 解析后端 400 错误 JSON {detail} → 可读文本 */
+export function parseApiError(err: string | undefined, fallback = '后端不可用'): string {
+  if (!err) return fallback;
+  try {
+    const j = JSON.parse(err) as { detail?: string };
+    if (typeof j.detail === 'string' && j.detail) return j.detail;
+  } catch { /* 非 JSON 直接返回原文 */ }
+  return err;
+}

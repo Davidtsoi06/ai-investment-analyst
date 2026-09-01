@@ -4,7 +4,7 @@
 SCHEMA_VERSION 递增并同步补充 MIGRATIONS：旧库通过 ALTER 增列/建索引平滑升级。
 """
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 TABLES_DDL = [
     # 1. 用户画像（引导问卷结果，可随时修改）
@@ -142,6 +142,8 @@ TABLES_DDL = [
         period_start TEXT,
         period_end TEXT,
         content TEXT NOT NULL,
+        stats_json TEXT,
+        behaviors_json TEXT,
         created_at TEXT NOT NULL
     )"""
     ,
@@ -196,6 +198,31 @@ TABLES_DDL = [
         created_at TEXT NOT NULL
     )"""
     ,
+    # 16. 虚拟账本交易流水（S15：纸面交易，buy 开仓 / sell 平仓）
+    """CREATE TABLE IF NOT EXISTS virtual_trades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol TEXT NOT NULL,
+        name TEXT,
+        market TEXT NOT NULL,
+        type TEXT NOT NULL,
+        quantity REAL NOT NULL,
+        price REAL NOT NULL,
+        amount REAL NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        pnl REAL,
+        recommendation_id INTEGER,
+        opened_at TEXT NOT NULL,
+        closed_at TEXT
+    )"""
+    ,
+    # 17. 虚拟账本账户（S15：单账户，初始余额=画像投资金额中值）
+    """CREATE TABLE IF NOT EXISTS virtual_account (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        balance REAL NOT NULL,
+        initial_balance REAL NOT NULL,
+        created_at TEXT NOT NULL
+    )"""
+    ,
     # 迁移版本记录
     """CREATE TABLE IF NOT EXISTS migrations (
         version INTEGER PRIMARY KEY,
@@ -205,6 +232,19 @@ TABLES_DDL = [
 
 # 版本化迁移：{版本: 步骤列表}。步骤必须幂等（增列前先查列存在性，建索引用 IF NOT EXISTS）。
 MIGRATIONS: dict[int, list[dict]] = {
+    7: [
+        # S15 契约对齐：复盘报告结构化统计（stats_json/behaviors_json）+ 虚拟账本流水关联推荐
+        {'kind': 'add_column', 'table': 'review_reports', 'column': 'stats_json', 'ddl': "ALTER TABLE review_reports ADD COLUMN stats_json TEXT"},
+        {'kind': 'add_column', 'table': 'review_reports', 'column': 'behaviors_json', 'ddl': "ALTER TABLE review_reports ADD COLUMN behaviors_json TEXT"},
+        {'kind': 'add_column', 'table': 'virtual_trades', 'column': 'recommendation_id', 'ddl': "ALTER TABLE virtual_trades ADD COLUMN recommendation_id INTEGER"},
+    ],
+    6: [
+        # S15 虚拟账本：virtual_trades + virtual_account（建表幂等，旧库升级时创建）
+        {'kind': 'sql', 'ddl': "CREATE TABLE IF NOT EXISTS virtual_trades (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL, name TEXT, market TEXT NOT NULL, type TEXT NOT NULL, quantity REAL NOT NULL, price REAL NOT NULL, amount REAL NOT NULL, status TEXT NOT NULL DEFAULT 'open', pnl REAL, opened_at TEXT NOT NULL, closed_at TEXT)"},
+        {'kind': 'sql', 'ddl': "CREATE TABLE IF NOT EXISTS virtual_account (id INTEGER PRIMARY KEY AUTOINCREMENT, balance REAL NOT NULL, initial_balance REAL NOT NULL, created_at TEXT NOT NULL)"},
+        {'kind': 'sql', 'ddl': "CREATE INDEX IF NOT EXISTS idx_virtual_trades_symbol ON virtual_trades(symbol)"},
+        {'kind': 'sql', 'ddl': "CREATE INDEX IF NOT EXISTS idx_virtual_trades_opened ON virtual_trades(opened_at)"},
+    ],
     5: [
         # S13 智能问答：chat_history 表 + 查询索引（建表幂等，旧库升级时创建）
         {'kind': 'sql', 'ddl': "CREATE TABLE IF NOT EXISTS chat_history (id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT NOT NULL, category TEXT, answer TEXT NOT NULL, used_data_json TEXT, degraded INTEGER DEFAULT 0, created_at TEXT NOT NULL)"},
