@@ -1,8 +1,14 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
+import * as path from 'path';
 import { createWindow } from './window';
 import { createTray } from './tray';
 import { setupUpdater } from './updater';
 import { backendManager } from './backend';
+import { log } from './logger';
+
+// F: 统一用户数据目录为英文名（与后端一致），避免双目录困惑
+app.setPath('userData', path.join(app.getPath('appData'), 'ai-investment-analyst'));
+log('INFO', '主进程启动，userData=' + app.getPath('userData'));
 
 // IPC：渲染进程经主进程代理访问后端（避免 CORS 与令牌暴露）
 ipcMain.handle('backend:request', (_e, payload: { method: string; path: string; body?: unknown }) =>

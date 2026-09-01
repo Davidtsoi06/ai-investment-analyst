@@ -38,7 +38,7 @@ jobs:
 
       - name: 打包后端为单文件 exe
         working-directory: backend
-        run: pyinstaller --onefile --name ai-invest-backend --distpath ../desktop/backend-bin --workpath ../.cache/pyi-build --specpath ../.cache/pyi-spec --paths . --hidden-import app.main --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan.on --hidden-import uvicorn.lifespan.off --clean run.py
+        run: pyinstaller --onedir --name ai-invest-backend --distpath ../desktop/backend-bin --workpath ../.cache/pyi-build --specpath ../.cache/pyi-spec --paths . --hidden-import app.main --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan.on --hidden-import uvicorn.lifespan.off --clean run.py
 
       - name: 复制前端产物到 desktop
         working-directory: desktop

@@ -2,6 +2,7 @@ import { ChildProcess, spawn } from 'child_process';
 import { app } from 'electron';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { log } from './logger';
 
 const BACKEND_PORT = 8756;
 const MAX_RESTARTS_PER_HOUR = 5;
@@ -11,6 +12,7 @@ export interface BackendStatus {
   version: string | null;
   url: string;
   restartCount: number;
+  error: string | null;  // 最近一次启动失败/连接失败原因（E: 传递给前端展示）
 }
 
 class BackendManager {
@@ -19,7 +21,8 @@ class BackendManager {
   private stopping = false;
   private restartCount = 0;
   private restartWindowStart = Date.now();
-  private status: BackendStatus = { running: false, version: null, url: '', restartCount: 0 };
+  private lastError: string | null = null;
+  private status: BackendStatus = { running: false, version: null, url: '', restartCount: 0, error: null };
 
   private backendUrl(): string {
     return `http://127.0.0.1:${BACKEND_PORT}`;
@@ -27,9 +30,9 @@ class BackendManager {
 
   private backendCommand(): { cmd: string; args: string[]; cwd: string } {
     if (app.isPackaged) {
-      // 生产：resources/backend-bin/ai-invest-backend.exe（electron-builder 打包时附带）
-      const cmd = path.join(process.resourcesPath, 'backend-bin', 'ai-invest-backend.exe');
-      return { cmd, args: [], cwd: path.dirname(cmd) };
+      // 生产（onedir 模式）：resources/backend-bin/ai-invest-backend/ai-invest-backend.exe
+      const exe = path.join(process.resourcesPath, 'backend-bin', 'ai-invest-backend', 'ai-invest-backend.exe');
+      return { cmd: exe, args: [], cwd: path.dirname(exe) };
     }
     // 开发：backend/.venv/Scripts/python.exe run.py
     const projectRoot = path.resolve(__dirname, '..', '..', '..');
@@ -45,17 +48,39 @@ class BackendManager {
     if (this.proc) return;
     this.stopping = false;
     const { cmd, args, cwd } = this.backendCommand();
-    console.log('[backend] 启动:', cmd, args.join(' '));
-    this.proc = spawn(cmd, args, {
-      env: { ...process.env, BACKEND_TOKEN: this.token },
-      cwd,
-      stdio: 'ignore',
+    log('INFO', `[backend] 启动: ${cmd} ${args.join(' ')}`);
+    this.lastError = null;
+    try {
+      this.proc = spawn(cmd, args, {
+        env: { ...process.env, BACKEND_TOKEN: this.token },
+        cwd,
+        stdio: 'ignore',
+      });
+    } catch (e) {
+      // spawn 本身失败（如 exe 不存在/无权限）
+      const msg = e instanceof Error ? e.message : String(e);
+      this.lastError = `后端启动失败: ${msg}`;
+      log('ERROR', `[backend] spawn 失败: ${msg}`);
+      this.status = { ...this.status, running: false, error: this.lastError };
+      return;
+    }
+    this.proc.on('error', (err) => {
+      // 启动失败（exe 无法执行等）
+      this.lastError = `后端进程错误: ${err.message}`;
+      log('ERROR', `[backend] 进程错误: ${err.message}`);
+      this.status = { ...this.status, running: false, error: this.lastError };
     });
     this.proc.on('exit', (code) => {
-      console.log('[backend] 进程退出 code=', code);
+      log('WARN', `[backend] 进程退出 code=${code}`);
       this.proc = null;
       this.status = { ...this.status, running: false };
-      if (!this.stopping) this.scheduleRestart();
+      if (!this.stopping) {
+        if (code !== null && code !== 0) {
+          this.lastError = `后端进程异常退出（code=${code}）`;
+          this.status = { ...this.status, error: this.lastError };
+        }
+        this.scheduleRestart();
+      }
     });
     await this.waitForHealth();
   }
@@ -67,11 +92,14 @@ class BackendManager {
       this.restartCount = 0;
     }
     if (this.restartCount >= MAX_RESTARTS_PER_HOUR) {
-      console.error('[backend] 重启次数超限，停止自动重启');
+      const msg = '后端重启次数超限，停止自动重启（请查看 data/logs/desktop.log）';
+      this.lastError = msg;
+      log('ERROR', `[backend] ${msg}`);
+      this.status = { ...this.status, running: false, error: msg };
       return;
     }
     this.restartCount += 1;
-    console.log(`[backend] 2 秒后自动重启（第 ${this.restartCount} 次）`);
+    log('WARN', `[backend] 2 秒后自动重启（第 ${this.restartCount} 次）`);
     setTimeout(() => { void this.start(); }, 2000);
   }
 
@@ -85,8 +113,8 @@ class BackendManager {
         });
         if (res.ok) {
           const data = (await res.json()) as { version: string };
-          this.status = { running: true, version: data.version, url: this.backendUrl(), restartCount: this.restartCount };
-          console.log('[backend] 就绪 version=', data.version);
+          this.status = { running: true, version: data.version, url: this.backendUrl(), restartCount: this.restartCount, error: null };
+          log('INFO', `[backend] 就绪 version=${data.version}`);
           return;
         }
       } catch {
@@ -94,8 +122,10 @@ class BackendManager {
       }
       await new Promise((r) => setTimeout(r, 500));
     }
-    console.error('[backend] 健康检查超时（30 秒）');
-    this.status = { ...this.status, running: false };
+    const msg = '后端健康检查超时（30 秒未就绪），请查看 data/logs/desktop.log 与后端日志';
+    this.lastError = msg;
+    log('ERROR', `[backend] ${msg}`);
+    this.status = { ...this.status, running: false, error: msg };
   }
 
   async stop(): Promise<void> {

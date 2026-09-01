@@ -131,6 +131,22 @@ def health(x_backend_token: str = Header(default="")):
     return {"status": "ok", "version": settings.version, "db": str(settings.db_path)}
 
 
+@app.get("/api/system/info")
+def system_info(x_backend_token: str = Header(default="")):
+    """系统信息：数据目录/快照目录（供设置页引导用户配置理财软件导出文件夹）"""
+    require_token(x_backend_token)
+    from .data_sources.portfolio_app import detect_snapshot_folder
+    folder = detect_snapshot_folder()
+    return {
+        "version": settings.version,
+        "data_dir": str(settings.data_dir),
+        "portfolio_dir": str(settings.data_dir / 'portfolio'),
+        "snapshot_detected": folder is not None,
+        "snapshot_dir": str(folder) if folder else None,
+        "db_path": str(settings.db_path),
+    }
+
+
 VALID_MARKETS = ('A股', '港股')
 
 

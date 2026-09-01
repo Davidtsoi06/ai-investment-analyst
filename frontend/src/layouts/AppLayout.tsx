@@ -20,6 +20,7 @@ const APP_VERSION = '0.6.0';
 
 export default function AppLayout() {
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
+  const [backendError, setBackendError] = useState<string | null>(null);
 
   // 后端连接状态检测（Electron 环境经 window.backend；浏览器直连调试不提示）
   useEffect(() => {
@@ -28,7 +29,10 @@ export default function AppLayout() {
     const check = async () => {
       try {
         const st = await window.backend?.status();
-        if (alive) setBackendOk(!!st && st.running === true);
+        if (alive) {
+          setBackendOk(!!st && st.running === true);
+          setBackendError(st?.error || null);
+        }
       } catch {
         if (alive) setBackendOk(false);
       }
@@ -78,9 +82,16 @@ export default function AppLayout() {
       {/* 内容区 */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {backendOk === false && (
-          <div className="flex items-center justify-center gap-2 bg-warning/15 border-b border-warning/40 px-4 py-1.5 text-xs font-medium text-warning">
-            <span>⚠</span>
-            <span>后端服务未连接，部分功能不可用（正在自动重试）</span>
+          <div className="bg-warning/15 border-b border-warning/40 px-4 py-1.5 text-xs font-medium text-warning">
+            <div className="flex items-center justify-center gap-2">
+              <span>⚠</span>
+              <span>后端服务未连接，部分功能不可用（正在自动重试）</span>
+            </div>
+            {backendError && (
+              <div className="text-center text-warning/80 mt-0.5 truncate" title={backendError}>
+                {backendError}
+              </div>
+            )}
           </div>
         )}
         <div className="flex-1 overflow-y-auto p-6">

@@ -3,7 +3,7 @@ import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import {
-  getSettings, saveSettings, saveAiKey, testAiKey, getBackendStatus, parseApiError,
+  api, getSettings, saveSettings, saveAiKey, testAiKey, getBackendStatus, parseApiError,
   type Settings as SettingsType,
 } from '../services/api';
 
@@ -30,6 +30,12 @@ export default function Settings() {
 
   useEffect(() => {
     getBackendStatus().then(setBackendStatus).catch(() => null);
+    api<{ portfolio_dir?: string; data_dir?: string }>('GET', '/api/system/info').then((r) => {
+      if (r.ok && r.data?.portfolio_dir) {
+        const el = document.getElementById('portfolio-dir');
+        if (el) el.textContent = r.data.portfolio_dir;
+      }
+    }).catch(() => {});
     getSettings().then((res) => {
       if (res.ok && res.data) {
         const s = res.data as SettingsType;
@@ -134,6 +140,15 @@ export default function Settings() {
           <h2 className="font-bold text-sm">后端服务</h2>
           {backendStatus ? (backendStatus.running ? <Badge variant="success">运行中 v{backendStatus.version}</Badge> : <Badge variant="danger">未连接</Badge>) : <Badge>检测中...</Badge>}
         </div>
+      </Card>
+
+      <Card>
+        <h2 className="font-bold text-sm mb-2">数据文件夹</h2>
+        <p className="text-xs text-text-secondary leading-5">
+          持仓数据通过本地文件交换：请将「个人理财投资软件」设置 → AI 配置 → 导出文件夹，指向以下目录：
+        </p>
+        <p className="text-xs font-mono bg-bg-secondary border border-border rounded px-2 py-1.5 mt-2 break-all" id="portfolio-dir">读取中...</p>
+        <p className="text-xs text-text-muted mt-1">数据库与日志存储于数据目录（%APPDATA%\ai-investment-analyst\data），请勿删除。</p>
       </Card>
 
       <div className="flex justify-end">

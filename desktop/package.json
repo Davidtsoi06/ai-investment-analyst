@@ -1,7 +1,7 @@
 {
   "name": "ai-investment-analyst",
   "productName": "AI投资分析软件",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "面向个人及家庭的 AI 驱动投资分析工具",
   "main": "dist/main/index.js",
   "author": "Davidtsoi06",
@@ -55,11 +55,12 @@
       "createDesktopShortcut": true,
       "shortcutName": "AI投资分析软件"
     },
-    "publish": {
-      "provider": "github",
-      "owner": "Davidtsoi06",
-      "repo": "ai-investment-analyst",
-      "draft": false
-    }
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Davidtsoi06",
+        "repo": "ai-investment-analyst"
+      }
+    ]
   }
 }
