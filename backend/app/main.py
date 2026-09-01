@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 """FastAPI 入口：健康检查 + 行情接口 + 生命周期初始化"""
 
+import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import settings
 from .models.database import init_db
@@ -49,6 +53,72 @@ app.add_middleware(
 )
 
 
+# ---------------- S16：统一异常响应 + 请求日志 ----------------
+# 技术设计规范 §八：后端统一异常响应格式；关键路径写日志。
+# 所有异常响应统一为 {ok:false, error, detail(兼容旧字段), status}，
+# 500 不泄露内部细节，未处理异常完整记录到 data/logs/app.log。
+
+def _error_body(status_code: int, message: str) -> dict:
+    return {'ok': False, 'error': message, 'detail': message, 'status': status_code}
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(_request: Request, exc: StarletteHTTPException):
+    """HTTPException（含 401/400/404/409 等）：保留业务 detail，框架默认英文提示转中文"""
+    status_message = {401: '未授权', 403: '禁止访问', 404: '接口不存在', 405: '请求方法不支持'}
+    if exc.detail:
+        message = str(exc.detail)
+        # 框架默认英文 detail（如 "Not Found" / "Method Not Allowed"）转中文
+        if message in ('Not Found', 'Method Not Allowed', 'Forbidden'):
+            message = status_message.get(exc.status_code, message)
+    else:
+        message = status_message.get(exc.status_code, '请求失败')
+    return JSONResponse(status_code=exc.status_code, content=_error_body(exc.status_code, message))
+
+
+_VALIDATION_MSG_MAP = {
+    'Field required': '缺少必填字段',
+    'String should have at least 1 character': '字符串长度不足',
+    'Input should be a valid integer': '必须为整数',
+    'Input should be a valid number': '必须为数字',
+}
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """参数校验失败（FastAPI 422）：转中文提示并记录日志"""
+    first = exc.errors()[0] if exc.errors() else {}
+    loc = '.'.join(str(x) for x in first.get('loc', []) if x not in ('body', 'query'))
+    raw = str(first.get('msg', '参数校验失败'))
+    msg = _VALIDATION_MSG_MAP.get(raw, raw)
+    message = f'参数校验失败: {loc} {msg}' if loc else f'参数校验失败: {msg}'
+    logger.warning('参数校验失败 %s %s: %s', request.method, request.url.path, message)
+    return JSONResponse(status_code=422, content=_error_body(422, message))
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """未处理异常兜底：记录完整堆栈，对外只返回通用提示（不泄露内部细节）"""
+    logger.exception('未处理异常 %s %s: %s', request.method, request.url.path, exc)
+    return JSONResponse(status_code=500, content=_error_body(500, '服务器内部错误，请查看 data/logs/app.log'))
+
+
+@app.middleware('http')
+async def request_logging_middleware(request: Request, call_next):
+    """请求日志：4xx/5xx 与慢请求（≥2 秒）记录 method/path/status/耗时；心跳与预检不记"""
+    start = time.monotonic()
+    response = await call_next(request)
+    duration_ms = (time.monotonic() - start) * 1000
+    status = response.status_code
+    if request.method == 'OPTIONS' or request.url.path == '/api/health':
+        return response
+    if status >= 400:
+        logger.warning('请求 %s %s -> %d (%.0fms)', request.method, request.url.path, status, duration_ms)
+    elif duration_ms >= 2000:
+        logger.info('慢请求 %s %s -> %d (%.0fms)', request.method, request.url.path, status, duration_ms)
+    return response
+
+
 def require_token(x_backend_token: str = Header(default="")) -> None:
     """令牌校验：主进程注入令牌后，所有请求必须携带"""
     if settings.backend_token and x_backend_token != settings.backend_token:
@@ -56,19 +126,34 @@ def require_token(x_backend_token: str = Header(default="")) -> None:
 
 
 @app.get("/api/health")
-def health(_: None = None, x_backend_token: str = Header(default="")):
+def health(x_backend_token: str = Header(default="")):
     require_token(x_backend_token)
     return {"status": "ok", "version": settings.version, "db": str(settings.db_path)}
 
 
+VALID_MARKETS = ('A股', '港股')
+
+
+def _validate_symbol_market(symbol: str, market: str) -> tuple[str, str]:
+    """行情类接口共用校验：symbol 非空、market ∈ {A股, 港股}；返回清洗后的值"""
+    symbol = (symbol or '').strip()
+    market = (market or 'A股').strip()
+    if not symbol:
+        raise HTTPException(status_code=400, detail='股票代码不能为空')
+    if market not in VALID_MARKETS:
+        raise HTTPException(status_code=400, detail='market 仅支持 A股/港股')
+    return symbol, market
+
+
 @app.get("/api/market/quote")
 def market_quote(
-    symbol: str = Query(..., description="股票代码，如 600519 / 00700"),
+    symbol: str = Query(..., min_length=1, description="股票代码，如 600519 / 00700"),
     market: str = Query("A股", description="A股/港股"),
     x_backend_token: str = Header(default=""),
 ):
     require_token(x_backend_token)
-    q = data_fusion.get_quote(symbol.strip(), market)
+    symbol, market = _validate_symbol_market(symbol, market)
+    q = data_fusion.get_quote(symbol, market)
     if q is None:
         raise HTTPException(status_code=404, detail="行情获取失败（数据源不可用）")
     return asdict(q)
@@ -76,23 +161,24 @@ def market_quote(
 
 @app.get("/api/market/kline")
 def market_kline(
-    symbol: str = Query(..., description="股票代码，如 600519 / 00700"),
-    market: str = Query("A股"),
+    symbol: str = Query(..., min_length=1, description="股票代码，如 600519 / 00700"),
+    market: str = Query("A股", description="A股/港股"),
     days: int = Query(120, ge=10, le=500),
     x_backend_token: str = Header(default=""),
 ):
     require_token(x_backend_token)
-    bars = data_fusion.get_kline(symbol.strip(), market, days)
+    symbol, market = _validate_symbol_market(symbol, market)
+    bars = data_fusion.get_kline(symbol, market, days)
     if bars is None:
         raise HTTPException(status_code=404, detail="K线获取失败（数据源不可用）")
-    return {"symbol": symbol.strip(), "market": market, "bars": [asdict(b) for b in bars]}
+    return {"symbol": symbol, "market": market, "bars": [asdict(b) for b in bars]}
 
 
 # ---------------- 用户画像与系统设置（S7） ----------------
 
 from typing import Any  # noqa: E402
 
-from pydantic import BaseModel  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
 
 from .services.profile_service import get_profile, save_profile  # noqa: E402
 from .services.settings_service import (  # noqa: E402
@@ -232,14 +318,14 @@ def register_news_jobs() -> None:
 
 
 @app.get("/api/news/latest")
-def news_latest(limit: int = 30, x_backend_token: str = Header(default="")):
+def news_latest(limit: int = Query(30, ge=1, le=100), x_backend_token: str = Header(default="")):
     require_token(x_backend_token)
     conn = get_connection()
     try:
         rows = conn.execute(
             "SELECT id, title, url, source, market, summary, level, published_at, created_at "
             "FROM news_cache ORDER BY id DESC LIMIT ?",
-            (min(limit, 100),),
+            (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -265,7 +351,7 @@ def news_premarket_push(x_backend_token: str = Header(default="")):
 
 
 @app.get("/api/notifications")
-def notifications_get(limit: int = 30, x_backend_token: str = Header(default="")):
+def notifications_get(limit: int = Query(30, ge=1, le=200), x_backend_token: str = Header(default="")):
     require_token(x_backend_token)
     return list_notifications(limit)
 
@@ -286,28 +372,20 @@ def portfolio_sync_api(x_backend_token: str = Header(default="")):
 def portfolio_overview_api(x_backend_token: str = Header(default="")):
     """持仓总览：本地 holdings 明细 + 理财软件快照（账户/净值）"""
     require_token(x_backend_token)
-    conn = None
+    import json as _json
+    conn = get_connection()
     try:
-        from .models.database import get_connection
-        conn = get_connection()
         holdings = [
             dict(r)
             for r in conn.execute(
                 "SELECT symbol, name, market, currency, quantity, cost_price, current_price, source, sync_at FROM holdings ORDER BY source, market"
             )
         ]
-    finally:
-        if conn:
-            conn.close()
-    from .models.database import get_connection as _gc
-    _conn = _gc()
-    try:
-        row = _conn.execute(
+        row = conn.execute(
             "SELECT value FROM system_settings WHERE key = 'portfolio_snapshot_v1'"
         ).fetchone()
     finally:
-        _conn.close()
-    import json as _json
+        conn.close()
     snapshot = _json.loads(row['value']) if row else None
     return {
         "holdings": holdings,
@@ -327,7 +405,7 @@ from .services.watchlist_service import (  # noqa: E402
 
 
 class WatchlistIn(BaseModel):
-    symbol: str
+    symbol: str = Field(..., min_length=1, description='股票代码')
     name: str = ''
     market: str = 'A股'
     group_name: str = '默认'
@@ -360,7 +438,11 @@ def watchlist_post(data: WatchlistIn, x_backend_token: str = Header(default=""))
     try:
         return _wl_add(data.symbol, data.name, data.market, data.group_name)
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        msg = str(e)
+        if '已存在' in msg:
+            raise HTTPException(status_code=409, detail=msg)
+        # 代码为空 / 市场非法 / 其他参数问题 -> 400
+        raise HTTPException(status_code=400, detail=msg)
 
 
 @app.put("/api/watchlist/{item_id}")
@@ -514,7 +596,7 @@ from .services.tracking_scheduler import (  # noqa: E402
 
 
 class TrackingIn(BaseModel):
-    symbol: str
+    symbol: str = Field(..., min_length=1, description='股票代码')
     name: str = ''
     market: str = 'A股'
     price_change_pct: float | None = None
@@ -723,7 +805,8 @@ def summary_snapshot(
 ):
     """实时市场快照（指数/板块/成交额/情绪），供报告页展示与调试"""
     require_token(x_backend_token)
-    if market not in ('A股', '港股'):
+    market = (market or 'A股').strip()
+    if market not in VALID_MARKETS:
         raise HTTPException(status_code=400, detail='market 仅支持 A股/港股')
     return collect_snapshot(market)
 
@@ -855,13 +938,6 @@ def macro_overview_api(x_backend_token: str = Header(default="")):
     return _macro_overview(refresh=False)
 
 
-@app.get("/api/macro/overview")
-def macro_overview_api(x_backend_token: str = Header(default="")):
-    """宏观总览：全球/中国指标列表 + 四色信号（当日已有缓存直接返回）"""
-    require_token(x_backend_token)
-    return _macro_overview(refresh=False)
-
-
 @app.post("/api/macro/refresh")
 def macro_refresh_api(x_backend_token: str = Header(default="")):
     """强制重新采集宏观指标并更新四色信号（幂等）"""
@@ -974,7 +1050,7 @@ class PaperAccountIn(BaseModel):
 
 
 class PaperTradeIn(BaseModel):
-    symbol: str
+    symbol: str = Field(..., min_length=1, description='股票代码')
     market: str = 'A股'
     type: str = ''
     side: str | None = None  # 前端兼容别名：type 与 side 二选一
@@ -982,7 +1058,7 @@ class PaperTradeIn(BaseModel):
 
 
 class PaperFromRecIn(BaseModel):
-    recommendation_id: int
+    recommendation_id: int = Field(..., ge=1, description='推荐记录 id')
 
 
 def _paper_error(e: Exception) -> HTTPException:

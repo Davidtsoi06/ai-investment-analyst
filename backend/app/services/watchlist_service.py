@@ -10,6 +10,9 @@ from typing import Any
 
 from ..data_sources.market.data_fusion import data_fusion
 from ..models.database import get_connection, utc_now
+from .logger import get_app_logger
+
+logger = get_app_logger()
 
 VALID_MARKETS = ('A股', '港股')
 
@@ -85,6 +88,7 @@ def add_watchlist(symbol: str, name: str = '', market: str = 'A股',
             "FROM watchlist WHERE id = ?",
             (cur.lastrowid,),
         ).fetchone()
+        logger.info('自选股添加: id=%s %s %s（组:%s）', cur.lastrowid, symbol, market, group_name)
         return dict(row)
     finally:
         conn.close()
@@ -125,6 +129,7 @@ def update_watchlist(item_id: int, name: str | None = None,
             "FROM watchlist WHERE id = ?",
             (item_id,),
         ).fetchone()
+        logger.info('自选股更新: id=%s 字段=%s', item_id, fields)
         return dict(row)
     finally:
         conn.close()
@@ -138,5 +143,6 @@ def delete_watchlist(item_id: int) -> None:
         conn.commit()
         if cur.rowcount == 0:
             raise ValueError(f'自选股不存在: id={item_id}')
+        logger.info('自选股删除: id=%s', item_id)
     finally:
         conn.close()
