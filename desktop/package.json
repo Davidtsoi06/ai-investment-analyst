@@ -58,7 +58,8 @@
     "publish": {
       "provider": "github",
       "owner": "Davidtsoi06",
-      "repo": "ai-investment-analyst"
+      "repo": "ai-investment-analyst",
+      "draft": false
     }
   }
 }
