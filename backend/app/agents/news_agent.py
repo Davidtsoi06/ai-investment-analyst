@@ -28,9 +28,11 @@ def _rule_level(title: str) -> str:
 
 
 def _get_holdings() -> list[str]:
+    from ..services.portfolio_sync import get_mode
+    src = 'portfolio_app' if get_mode() == 'snapshot' else 'manual'
     conn = get_connection()
     try:
-        rows = conn.execute('SELECT name, symbol FROM holdings').fetchall()
+        rows = conn.execute('SELECT name, symbol FROM holdings WHERE source = ?', (src,)).fetchall()
         return [r['name'] for r in rows] + [r['symbol'] for r in rows]
     finally:
         conn.close()

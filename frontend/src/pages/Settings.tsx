@@ -3,7 +3,8 @@ import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import {
-  api, getSettings, saveSettings, saveAiKey, testAiKey, getBackendStatus, parseApiError,
+  api, getSettings, saveSettings, saveAiKey, testAiKey, getBackendStatus, getProfile, saveProfile, parseApiError,
+  type Profile as ProfileType,
   type Settings as SettingsType,
 } from '../services/api';
 
@@ -33,6 +34,14 @@ export default function Settings() {
   const [updPercent, setUpdPercent] = useState(0);
   const [updMsg, setUpdMsg] = useState('');
   const [updError, setUpdError] = useState('');
+  // 投资风格（画像，PUT /api/profile）
+  const [profile, setProfile] = useState<Partial<ProfileType>>({});
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileMsg, setProfileMsg] = useState('');
+  // 持仓数据来源模式（手动录入 / 快照文件）
+  const [pfMode, setPfMode] = useState<string>('snapshot');
+  const [pfLoadedMode, setPfLoadedMode] = useState<string | null>(null);
+  const [pfStatus, setPfStatus] = useState<{ snapshot_detected?: boolean; snapshot_dir?: string | null; snapshot_modified_at?: string | null } | null>(null);
 
   useEffect(() => {
     if (!window.updater) return;
@@ -68,10 +77,17 @@ export default function Settings() {
 
   useEffect(() => {
     getBackendStatus().then(setBackendStatus).catch(() => null);
+    getProfile().then((r) => { if (r.ok && r.data) setProfile(r.data as ProfileType); }).catch(() => {});
     api<{ portfolio_dir?: string; data_dir?: string }>('GET', '/api/system/info').then((r) => {
       if (r.ok && r.data?.portfolio_dir) {
         const el = document.getElementById('portfolio-dir');
         if (el) el.textContent = r.data.portfolio_dir;
+      }
+    }).catch(() => {});
+    api<{ mode?: string; snapshot_detected?: boolean; snapshot_dir?: string | null; snapshot_modified_at?: string | null }>('GET', '/api/portfolio/status').then((r) => {
+      if (r.ok && r.data) {
+        if (r.data.mode) { setPfMode(r.data.mode); setPfLoadedMode(r.data.mode); }
+        setPfStatus(r.data);
       }
     }).catch(() => {});
     getSettings().then((res) => {
@@ -91,8 +107,15 @@ export default function Settings() {
   const save = async () => {
     setSaving(true);
     const res = await saveSettings({ markets, notifications, quiet_hours: quietHours });
+    let ok = res.ok;
+    // 持仓数据来源模式变化 → 单独保存
+    if (ok && pfLoadedMode !== null && pfMode !== pfLoadedMode) {
+      const mr = await api<{ ok?: boolean; reason?: string }>('PUT', '/api/portfolio/mode', { mode: pfMode });
+      ok = mr.ok && (mr.data as { ok?: boolean } | undefined)?.ok !== false;
+      if (ok) setPfLoadedMode(pfMode);
+    }
     setSaving(false);
-    setSavedMsg(res.ok ? '已保存 ✅' : `保存失败：${parseApiError(res.error)}`);
+    setSavedMsg(ok ? '已保存 ✅' : `保存失败：${parseApiError(res.error)}`);
     setTimeout(() => setSavedMsg(''), 3000);
   };
 
@@ -101,6 +124,20 @@ export default function Settings() {
     const r = await saveAiKey(apiKey.trim());
     if (r.ok) { setAiConfigured(true); setAiMsg('已保存（加密存储）'); setApiKey(''); }
     else setAiMsg(`保存失败：${parseApiError(r.error)}`);
+  };
+
+  const saveProfileInfo = async () => {
+    setProfileSaving(true);
+    setProfileMsg('');
+    const r = await saveProfile({
+      risk_tolerance: String(profile.risk_tolerance ?? '稳健型'),
+      invest_amount: String(profile.invest_amount ?? '10-50万'),
+      holding_period: String(profile.holding_period ?? '数天~数周'),
+      experience: String(profile.experience ?? '有经验'),
+    });
+    setProfileSaving(false);
+    setProfileMsg(r.ok ? '投资风格已保存 ✅' : `保存失败：${parseApiError(r.error)}`);
+    setTimeout(() => setProfileMsg(''), 3000);
   };
 
   const testKey = async () => {
@@ -174,6 +211,62 @@ export default function Settings() {
       </Card>
 
       <Card>
+        <div className="flex items-center gap-3 mb-1">
+          <h2 className="font-bold text-sm">投资风格</h2>
+          <span className="text-xs text-text-muted">影响推荐范围与风险控制（与引导问卷一致，随时可改）</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 pt-2">
+          <div>
+            <div className="text-xs text-text-secondary mb-1.5">风险偏好</div>
+            <div className="flex flex-wrap gap-2">
+              {['保守型', '稳健型', '激进型'].map((o) => (
+                <button key={o} onClick={() => setProfile({ ...profile, risk_tolerance: o })}
+                  className={'px-3 py-1.5 rounded-lg border text-sm ' + (profile.risk_tolerance === o ? 'border-primary-500 bg-primary-50 text-primary-700 font-medium' : 'border-border')}>
+                  {o}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-text-muted mt-1.5">
+              {profile.risk_tolerance === '保守型' && '优先本金安全：以低波动/高股息标的为主，严格控制仓位。'}
+              {profile.risk_tolerance === '稳健型' && '攻守平衡：长短线结合，设置止损纪律，避免单只集中度过高。'}
+              {profile.risk_tolerance === '激进型' && '追求高弹性：可承受较大波动，短线机会优先，务必严格执行止损。'}
+            </p>
+          </div>
+          <div className="space-y-3">
+            <div>
+              <div className="text-xs text-text-secondary mb-1">可投资金额</div>
+              <select value={profile.invest_amount || '10-50万'} onChange={(e) => setProfile({ ...profile, invest_amount: e.target.value })}
+                className="rounded border border-border px-2 py-1.5 text-sm bg-white focus:border-primary-500 outline-none w-40">
+                {['10万以下', '10-50万', '50-100万', '100万以上'].map((o) => <option key={o}>{o}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-wrap gap-x-8 gap-y-3">
+              <div>
+                <div className="text-xs text-text-secondary mb-1">持仓周期</div>
+                <select value={profile.holding_period || '数天~数周'} onChange={(e) => setProfile({ ...profile, holding_period: e.target.value })}
+                  className="rounded border border-border px-2 py-1.5 text-sm bg-white focus:border-primary-500 outline-none w-36">
+                  {['日内交易', '数天~数周', '数月以上'].map((o) => <option key={o}>{o}</option>)}
+                </select>
+              </div>
+              <div>
+                <div className="text-xs text-text-secondary mb-1">投资经验</div>
+                <select value={profile.experience || '有经验'} onChange={(e) => setProfile({ ...profile, experience: e.target.value })}
+                  className="rounded border border-border px-2 py-1.5 text-sm bg-white focus:border-primary-500 outline-none w-28">
+                  {['新手', '有经验', '资深'].map((o) => <option key={o}>{o}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 flex items-center gap-3">
+          <Button size="sm" onClick={saveProfileInfo} disabled={profileSaving}>
+            {profileSaving ? '保存中...' : '保存投资风格'}
+          </Button>
+          {profileMsg && <span className="text-xs text-success">{profileMsg}</span>}
+        </div>
+      </Card>
+
+      <Card>
         <div className="flex items-center gap-3 mb-3">
           <h2 className="font-bold text-sm">后端服务</h2>
           {backendStatus ? (backendStatus.running ? <Badge variant="success">运行中 v{backendStatus.version}</Badge> : <Badge variant="danger">未连接</Badge>) : <Badge>检测中...</Badge>}
@@ -181,12 +274,50 @@ export default function Settings() {
       </Card>
 
       <Card>
-        <h2 className="font-bold text-sm mb-2">数据文件夹</h2>
-        <p className="text-xs text-text-secondary leading-5">
-          持仓数据通过本地文件交换：请将「个人理财投资软件」设置 → AI 配置 → 导出文件夹，指向以下目录：
-        </p>
-        <p className="text-xs font-mono bg-bg-secondary border border-border rounded px-2 py-1.5 mt-2 break-all" id="portfolio-dir">读取中...</p>
-        <p className="text-xs text-text-muted mt-1">数据库与日志存储于数据目录（%APPDATA%\ai-investment-analyst\data），请勿删除。</p>
+        <div className="flex flex-wrap items-center gap-2 mb-2">
+          <h2 className="font-bold text-sm">持仓数据来源</h2>
+          <span className="text-xs text-text-muted">决定持仓如何进入本软件（推荐 / 风险 / 复盘均按当前来源计算）</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <button
+            onClick={() => setPfMode('snapshot')}
+            className={'rounded-lg border p-3 text-left text-sm transition ' + (pfMode === 'snapshot' ? 'border-primary-500 bg-primary-50' : 'border-border hover:border-primary-300')}
+          >
+            <div className={'font-medium ' + (pfMode === 'snapshot' ? 'text-primary-700' : 'text-primary-900')}>
+              {pfMode === 'snapshot' ? '☑' : '☐'} 快照文件（推荐）
+            </div>
+            <p className="text-xs text-text-secondary mt-1 leading-5">
+              读取「个人理财投资软件」v1.10.15+ 自动导出的 portfolio_snapshot.json，含持仓/账户/交易/净值，每小时自动同步，无需重复录入。
+            </p>
+          </button>
+          <button
+            onClick={() => setPfMode('manual')}
+            className={'rounded-lg border p-3 text-left text-sm transition ' + (pfMode === 'manual' ? 'border-primary-500 bg-primary-50' : 'border-border hover:border-primary-300')}
+          >
+            <div className={'font-medium ' + (pfMode === 'manual' ? 'text-primary-700' : 'text-primary-900')}>
+              {pfMode === 'manual' ? '☑' : '☐'} 手动录入
+            </div>
+            <p className="text-xs text-text-secondary mt-1 leading-5">
+              不使用理财软件，在「持仓总览」页直接录入代码/数量/成本价自行管理。
+            </p>
+          </button>
+        </div>
+        {pfMode === 'snapshot' ? (
+          <div className="mt-3 rounded border border-border bg-bg-secondary/60 px-3 py-2">
+            <p className="text-xs text-text-secondary leading-5">
+              快照目录：<span className="font-mono" id="portfolio-dir">读取中...</span>
+            </p>
+            <p className="text-xs text-text-muted mt-1">
+              请将「个人理财投资软件」设置 → AI 配置 → 导出文件夹，指向以上目录，并在理财软件中导出一次持仓快照。
+              {pfStatus && pfStatus.snapshot_detected
+                ? '（已检测到快照文件，更新于 ' + (pfStatus.snapshot_modified_at || '—') + '）'
+                : '（当前尚未检测到快照文件）'}
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs text-warning mt-2">切换为手动录入后，此前同步的持仓将被清理（可随时切回并重新同步）。</p>
+        )}
+        <p className="text-xs text-text-muted mt-2">数据库与日志存储于数据目录（%APPDATA%\ai-investment-analyst\data），请勿删除。</p>
       </Card>
 
       <div className="flex justify-end">
@@ -231,7 +362,7 @@ export default function Settings() {
 
       <Card>
         <h2 className="font-bold mb-2 text-sm">关于</h2>
-        <p className="text-xs text-text-secondary">AI 投资分析软件 v{window.appInfo?.versions?.app || '0.6.0'} · 本地运行 · 数据安全 · 投资建议仅供参考</p>
+        <p className="text-xs text-text-secondary">AI 投资分析软件 v{updVersion || window.appInfo?.versions?.app || 'dev'} · 本地运行 · 数据安全 · 投资建议仅供参考</p>
       </Card>
     </div>
   );

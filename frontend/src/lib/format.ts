@@ -24,22 +24,16 @@ export function num(v: unknown): number | null {
   return null;
 }
 
-/** 比率归一化为百分数：0.667 → 66.7；66.7 → 66.7 */
-export function toPercent(v: number | string | null | undefined): number | null {
-  const n = num(v);
-  if (n === null) return null;
-  return Math.abs(n) <= 1 ? n * 100 : n;
-}
-
 /** 涨跌/盈亏配色（统一规范：涨绿跌红，0/空为中性灰） */
 export function upDownCls(v: number | null | undefined): string {
   if (v === null || v === undefined || v === 0) return 'text-text';
   return v > 0 ? 'text-success' : 'text-danger';
 }
 
-/** 百分数显示：0.667 → +66.7%；66.7 → +66.7%；空 → — */
+/** 百分数显示：后端所有比率字段（涨跌幅/胜率/收益率等）统一为百分数原值，
+ * 如 -0.58 即表示 -0.58%，不再自动 ×100（旧版会把 -0.58% 显示成 -58%）；空 → — */
 export function fmtPct(v: number | string | null | undefined, digits = 1): string {
-  const p = toPercent(v);
+  const p = num(v);
   return p === null ? '—' : (p > 0 ? '+' : '') + p.toFixed(digits) + '%';
 }
 

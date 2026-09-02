@@ -178,7 +178,7 @@ export default function Dashboard() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-bold text-primary-900">仪表盘</h1>
+        <h1 className="text-xl font-bold text-primary-900">主页</h1>
         <p className="text-xs text-text-muted mt-1">资产总览 · 市场速览 · 今日推荐 · 宏观信号 · 通知中心</p>
       </div>
       {ovError && <p className="text-sm text-danger">{ovError}</p>}

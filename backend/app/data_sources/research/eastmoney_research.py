@@ -152,9 +152,11 @@ def fetch_research(keyword: str | None = None, limit: int = 10) -> dict:
 
 def _holding_related(item: dict) -> tuple[bool, str]:
     """研报股票是否在用户持仓中（代码或名称匹配）"""
+    from ...services.portfolio_sync import get_mode
+    src = 'portfolio_app' if get_mode() == 'snapshot' else 'manual'
     conn = get_connection()
     try:
-        rows = conn.execute('SELECT symbol, name FROM holdings').fetchall()
+        rows = conn.execute('SELECT symbol, name FROM holdings WHERE source = ?', (src,)).fetchall()
     finally:
         conn.close()
     stock = item.get('stock') or {}

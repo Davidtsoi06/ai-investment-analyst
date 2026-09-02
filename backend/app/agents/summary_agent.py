@@ -57,10 +57,12 @@ def _load_holdings(markets: list[str]) -> list[dict]:
     """持仓 + 实时行情（失败跳过）：当日涨跌 / 持仓盈亏"""
     conn = get_connection()
     try:
+        from ..services.portfolio_sync import get_mode
+        src = 'portfolio_app' if get_mode() == 'snapshot' else 'manual'
         rows = conn.execute(
             "SELECT symbol, name, market, quantity, cost_price, current_price "
-            "FROM holdings WHERE market IN (%s) ORDER BY market, symbol" % ','.join('?' * len(markets)),
-            markets,
+            "FROM holdings WHERE market IN (%s) AND source = ? ORDER BY market, symbol" % ','.join('?' * len(markets)),
+            markets + [src],
         ).fetchall()
     finally:
         conn.close()

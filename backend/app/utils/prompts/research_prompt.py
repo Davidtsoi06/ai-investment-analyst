@@ -19,9 +19,11 @@ INTERPRET_PROMPT = (
 def build_interpret_prompt(item: dict) -> str:
     """构建研报解读 user prompt"""
     from ...models.database import get_connection
+    from ...services.portfolio_sync import get_mode
+    src = 'portfolio_app' if get_mode() == 'snapshot' else 'manual'
     conn = get_connection()
     try:
-        rows = conn.execute('SELECT symbol, name FROM holdings').fetchall()
+        rows = conn.execute('SELECT symbol, name FROM holdings WHERE source = ?', (src,)).fetchall()
     finally:
         conn.close()
     holdings_txt = '、'.join(f"{r['name']}（{r['symbol']}）" for r in rows) if rows else '无持仓记录'

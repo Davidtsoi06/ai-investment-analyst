@@ -45,9 +45,9 @@ if (!app.requestSingleInstanceLock()) {
     });
   });
 
-  // 常驻后台：关闭窗口不退出应用，保留系统托盘
+  // V1.0.5：× 关闭窗口即完全退出（before-quit 会停止后端进程）；最小化保持后台
   app.on('window-all-closed', () => {
-    // 不调用 app.quit()：托盘驻留，符合全天候在线设计
+    app.quit();
   });
 
   app.on('before-quit', () => {

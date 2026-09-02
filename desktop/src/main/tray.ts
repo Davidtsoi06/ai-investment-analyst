@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, Tray, nativeImage } from 'electron';
+import { createWindow } from './window';
 import * as path from 'path';
 
 let tray: Tray | null = null;
@@ -14,6 +15,7 @@ export function createTray(): Tray {
       click: () => {
         const w = BrowserWindow.getAllWindows()[0];
         if (w) { w.show(); w.focus(); }
+        else { createWindow(); }
       },
     },
     { type: 'separator' },

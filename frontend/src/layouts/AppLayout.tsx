@@ -2,7 +2,7 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 
 const navItems = [
-  { path: '/', label: '仪表盘', icon: '📊' },
+  { path: '/', label: '主页', icon: '🏠' },
   { path: '/news', label: '资讯看板', icon: '📰' },
   { path: '/portfolio', label: '持仓总览', icon: '💼' },
   { path: '/recommendation', label: '推荐中心', icon: '🎯' },
@@ -15,10 +15,9 @@ const navItems = [
   { path: '/settings', label: '系统设置', icon: '⚙️' },
 ];
 
-// 版本号优先取主进程注入的 appInfo（打包后随 package.json 更新），开发环境兜底
-const APP_VERSION = '0.6.0';
-
 export default function AppLayout() {
+  // 真实版本：优先主进程 app.getVersion()（IPC），其次 preload 注入，浏览器/开发环境兜底 dev
+  const [appVersion, setAppVersion] = useState('');
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
 
@@ -45,7 +44,20 @@ export default function AppLayout() {
     };
   }, []);
 
-  const version = window.appInfo?.versions?.app || APP_VERSION;
+  // 真实版本：主进程 app.getVersion()（打包后即 package.json 版本）；preload 注入兜底；浏览器开发 dev
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        if (window.updater?.getVersion) {
+          const v = await window.updater.getVersion();
+          if (alive && v?.version) { setAppVersion(v.version); return; }
+        }
+      } catch { /* 忽略 */ }
+      if (alive) setAppVersion(window.appInfo?.versions?.app || 'dev');
+    })();
+    return () => { alive = false; };
+  }, []);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -55,7 +67,7 @@ export default function AppLayout() {
           <span className="text-xl">📈</span>
           <div>
             <div className="font-bold text-sm">AI 投资分析</div>
-            <div className="text-xs opacity-70">v{version}</div>
+            <div className="text-xs opacity-70">v{appVersion || '…'}</div>
           </div>
         </div>
         <nav className="flex-1 overflow-y-auto py-2">

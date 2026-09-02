@@ -230,7 +230,11 @@ export default function Recommendation() {
             {todayLoading ? '刷新中...' : '刷新'}
           </Button>
           <Button onClick={handleGenerate} disabled={generating}>
-            {generating ? '正在分析候选股票（约 5~15 秒）...' : '生成今日推荐'}
+            {generating
+              ? '正在分析候选股票（约 5~15 秒）...'
+              : today?.cached === true
+                ? '重新生成（覆盖今日）'
+                : '生成今日推荐'}
           </Button>
         </div>
       </div>
@@ -242,11 +246,15 @@ export default function Recommendation() {
           <h2 className="font-bold text-sm">今日推荐</h2>
           {todayDate && <span className="text-xs text-text-muted">{todayDate}</span>}
           {today?.source && (
-            <Badge variant={today.source === 'ai' ? 'info' : 'warning'}>
-              {today.source === 'ai' ? 'AI 生成' : '规则降级'}
-            </Badge>
+            <span title={today.source === 'ai' ? '由 DeepSeek 大模型综合研判生成' : '未配置 AI Key 或 AI 调用失败时，由内置规则引擎按技术形态与估值评分生成'}>
+              <Badge variant={today.source === 'ai' ? 'info' : 'warning'}>
+                {today.source === 'ai' ? 'AI 生成' : '规则降级'}
+              </Badge>
+            </span>
           )}
-          {today?.cached === true && <span className="text-xs text-text-muted">（缓存）</span>}
+          {today?.cached === true && (
+            <span className="text-xs text-text-muted" title="今日推荐已生成并存入本地，展示的是缓存结果；如需强制重新分析请点右上角「重新生成」">（缓存）</span>
+          )}
           <span className="text-xs text-text-muted">短线 {shortRecs.length} · 长线 {longRecs.length}</span>
         </div>
         {todayError && <p className="text-sm text-danger mb-2">{todayError}</p>}
@@ -258,7 +266,39 @@ export default function Recommendation() {
         {todayLoading && items.length === 0 ? (
           <Loading />
         ) : items.length === 0 ? (
-          <EmptyState icon="🎯" title="今日暂无推荐" description="点击右上角「生成今日推荐」开始（每个交易日 09:15 自动生成）。" />
+          today ? (
+            <div className="rounded-lg border border-border bg-bg-secondary/40 px-4 py-4">
+              <div className="flex flex-wrap items-center gap-2 mb-1.5">
+                <span className="text-sm font-bold text-primary-900">今日暂无推荐</span>
+                {today.cached === true && <Badge variant="info">已生成（缓存）</Badge>}
+                {typeof today.pool_size === 'number' && today.pool_size > 0 && (
+                  <span className="text-xs text-text-muted">候选池 {today.pool_size} 只</span>
+                )}
+              </div>
+              <p className="text-xs text-text-secondary leading-5">
+                {today.empty_reason
+                  ? today.empty_reason
+                  : today.cached === true
+                    ? '今日推荐已生成过（缓存结果为空），如行情变化可点「重新生成」强制重算。'
+                    : '候选股票均已分析，但当前没有满足条件的推荐。'}
+              </p>
+              {typeof today.candidate_count === 'number' && today.candidate_count > 0 && (
+                <p className="text-xs text-text-muted mt-1">本次实际分析 {today.candidate_count} 只候选股票。</p>
+              )}
+              {today.source === 'rules' && (
+                <p className="text-xs text-text-muted mt-1">
+                  当前处于「规则降级」模式：未配置 DeepSeek Key 或 AI 调用失败时，由内置规则引擎按技术形态/估值评分筛选，标准较 AI 更保守。
+                </p>
+              )}
+              <div className="mt-3">
+                <Button size="sm" onClick={handleGenerate} disabled={generating}>
+                  {generating ? '正在分析...' : today.cached === true ? '重新生成' : '生成今日推荐'}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <EmptyState icon="🎯" title="今日暂无推荐" description="点击右上角「生成今日推荐」开始（每个交易日 09:15 自动生成）。" />
+          )
         ) : (
           <div className="space-y-4">
             {shortRecs.length > 0 && (

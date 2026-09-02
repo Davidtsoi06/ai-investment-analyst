@@ -244,6 +244,21 @@ export default function Chat() {
     void send(q);
   };
 
+  /** 查看历史对话：把该条 question + answer 完整载入聊天区（#9） */
+  const handleViewHistory = (h: ChatHistoryItem) => {
+    setTab('chat');
+    setMessages([
+      { id: nextId(), role: 'user', text: h.question },
+      {
+        id: nextId(),
+        role: 'assistant',
+        text: h.answer || '（该条无回答内容）',
+        category: h.category ?? undefined,
+        degraded: !!h.degraded,
+      },
+    ]);
+  };
+
   // ---- 研报 ----
   const loadResearch = useCallback(async (keyword: string) => {
     const seq = ++searchSeq.current;
@@ -295,8 +310,8 @@ export default function Chat() {
   );
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="flex flex-col gap-4 h-[calc(100vh-3.5rem)] min-h-0">
+      <div className="flex flex-wrap items-center justify-between gap-3 shrink-0">
         <div>
           <h1 className="text-xl font-bold text-primary-900">智能问答</h1>
           <p className="text-xs text-text-muted mt-1">
@@ -310,10 +325,10 @@ export default function Chat() {
       </div>
 
       {tab === 'chat' ? (
-        <div className="flex gap-4 items-start">
+        <div className="flex gap-4 items-stretch flex-1 min-h-0">
           {/* 聊天主区 */}
-          <Card className="flex-1 flex flex-col p-0 overflow-hidden">
-            <div ref={listRef} className="h-[420px] overflow-y-auto p-4 space-y-4">
+          <Card className="flex-1 flex flex-col p-0 overflow-hidden min-h-0">
+            <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
               {messages.map((m) => (
                 <div key={m.id} className={'flex ' + (m.role === 'user' ? 'justify-end' : 'justify-start')}>
                   <div
@@ -396,24 +411,25 @@ export default function Chat() {
           </Card>
 
           {/* 对话历史 */}
-          <Card className="w-72 shrink-0 flex flex-col p-0 overflow-hidden">
+          <Card className="w-72 shrink-0 flex flex-col p-0 overflow-hidden min-h-0">
             <div className="flex items-center justify-between px-4 py-3 border-b border-border">
               <h2 className="font-bold text-sm">对话历史</h2>
               <span className="text-xs text-text-muted">最近 30 条</span>
             </div>
-            <div className="flex-1 overflow-y-auto max-h-[560px]">
+            <div className="flex-1 min-h-0 overflow-y-auto">
               {historyError && <p className="px-4 py-2 text-xs text-danger">{historyError}</p>}
               {historyLoading && history.length === 0 && <Loading className="py-4" text="加载中..." />}
               {!historyLoading && history.length === 0 && !historyError && (
                 <p className="px-4 py-3 text-xs text-text-muted">暂无历史记录，提问后自动保存。</p>
               )}
               {history.map((h) => (
-                <button
+                <div
                   key={h.id}
-                  type="button"
-                  disabled={sending}
-                  onClick={() => handleReask(h.question)}
-                  className="w-full text-left px-4 py-2.5 border-b border-border last:border-b-0 hover:bg-primary-50/60 transition-colors disabled:opacity-50"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleViewHistory(h)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleViewHistory(h); }}
+                  className="w-full text-left px-4 py-2.5 border-b border-border last:border-b-0 hover:bg-primary-50/60 transition-colors cursor-pointer"
                 >
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium text-text truncate flex-1">{h.question}</span>
@@ -422,9 +438,19 @@ export default function Chat() {
                   <div className="flex items-center gap-2 mt-1 text-xs text-text-muted">
                     {h.category && <span>{h.category}</span>}
                     {h.created_at && <span className="font-number">{fmtBjt(h.created_at)}</span>}
-                    <span className="ml-auto">重新提问</span>
                   </div>
-                </button>
+                  <div className="mt-1.5 flex items-center gap-3 text-xs">
+                    <span className="text-primary-600">👁 查看完整对话</span>
+                    <button
+                      type="button"
+                      disabled={sending}
+                      onClick={(e) => { e.stopPropagation(); handleReask(h.question); }}
+                      className="text-text-muted hover:text-primary-600 disabled:opacity-50"
+                    >
+                      ↻ 重新提问
+                    </button>
+                  </div>
+                </div>
               ))}
             </div>
             <div className="px-4 py-2.5 border-t border-border">
@@ -435,10 +461,10 @@ export default function Chat() {
           </Card>
         </div>
       ) : (
-        <div className="flex gap-4 items-start">
+        <div className="flex gap-4 items-stretch flex-1 min-h-0">
           {/* 研报列表 */}
-          <Card className="w-[46%] shrink-0 flex flex-col p-0 overflow-hidden">
-            <div className="px-4 py-3 border-b border-border">
+          <Card className="w-[46%] shrink-0 flex flex-col p-0 overflow-hidden min-h-0">
+            <div className="px-4 py-3 border-b border-border shrink-0">
               <h2 className="font-bold text-sm mb-2">研报列表</h2>
               <div className="flex gap-2">
                 <input
@@ -456,7 +482,7 @@ export default function Chat() {
               </div>
               <p className="text-xs text-text-muted mt-2">东方财富研报 · 数据源不可用时自动降级为资讯匹配</p>
             </div>
-            <div className="flex-1 overflow-y-auto max-h-[500px]">
+            <div className="flex-1 min-h-0 overflow-y-auto">
               {researchError && <p className="px-4 py-3 text-xs text-danger">{researchError}</p>}
               {researchLoading && researchItems.length === 0 && <Loading className="py-4" text="加载中..." />}
               {!researchLoading && researchItems.length === 0 && !researchError && (
@@ -489,14 +515,14 @@ export default function Chat() {
           </Card>
 
           {/* 解读结果 */}
-          <Card className="flex-1 flex flex-col p-0 overflow-hidden">
-            <div className="px-4 py-3 border-b border-border flex flex-wrap items-center gap-2">
+          <Card className="flex-1 flex flex-col p-0 overflow-hidden min-h-0">
+            <div className="px-4 py-3 border-b border-border flex flex-wrap items-center gap-2 shrink-0">
               <h2 className="font-bold text-sm">AI 解读</h2>
               {interpret?.holding_match && <Badge variant="success">关联持仓</Badge>}
               {interpret?.degraded && <Badge variant="warning">规则模式</Badge>}
               {selectedTitle && <span className="text-xs text-text-muted truncate max-w-[60%]">{selectedTitle}</span>}
             </div>
-            <div className="flex-1 overflow-y-auto max-h-[540px] p-4">
+            <div className="flex-1 min-h-0 overflow-y-auto p-4">
               {interpretLoading && <p className="text-sm text-text-muted">正在解读研报（AI 提取核心观点，无 Key 时降级为原文展示）...</p>}
               {interpretError && <p className="text-sm text-danger">{interpretError}</p>}
               {!interpretLoading && !interpretError && !interpret && (

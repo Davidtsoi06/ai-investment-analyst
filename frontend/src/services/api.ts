@@ -163,6 +163,12 @@ export interface TodayRecommendations {
   items: RecommendItem[];
   blocked?: BlockedItem[];
   errors?: string[];
+  /** 本次实际分析的候选数（生成后） */
+  candidate_count?: number;
+  /** 候选池总数 */
+  pool_size?: number;
+  /** 无推荐时的可读原因 */
+  empty_reason?: string | null;
 }
 
 export interface HistoryItem extends RecommendItem {
@@ -430,8 +436,11 @@ export interface RiskConcentrationItem {
   symbol?: string;
   name?: string;
   market?: string;
-  /** 集中度权重（小数或百分数均可） */
+  /** 集中度权重（后端为小数，如 0.4022 = 40.22%） */
+  weight?: number | null;
+  /** 兼容字段：部分旧数据为百分数 */
   weight_pct?: number | null;
+  /** 市值金额（元），仅展示用，勿当百分比 */
   value?: number | null;
   [k: string]: unknown;
 }
@@ -742,16 +751,37 @@ export interface PortfolioSnapshot {
 }
 
 export interface PortfolioStatus {
-  detected: boolean;
-  db_path?: string | null;
+  /** 持仓数据模式：snapshot（快照文件）/ manual（手动录入） */
+  mode: string;
+  snapshot_detected?: boolean;
+  snapshot_dir?: string | null;
+  snapshot_modified_at?: string | null;
+  holdings_count?: number;
   [k: string]: unknown;
 }
 
-/** GET /api/portfolio/overview：本地持仓明细 + 理财软件快照（账户/净值）+ 对接状态 */
+/** GET /api/portfolio/overview：按模式过滤的本地持仓明细 + 快照（账户/净值） */
 export interface PortfolioOverview {
+  mode?: string;
   holdings?: HoldingItem[] | null;
   snapshot?: PortfolioSnapshot | null;
   status?: PortfolioStatus | null;
+  [k: string]: unknown;
+}
+
+/** PUT /api/portfolio/mode 结果 */
+export interface PortfolioModeResult {
+  ok?: boolean;
+  mode?: string;
+  [k: string]: unknown;
+}
+
+/** POST/DELETE /api/portfolio/holdings 结果 */
+export interface PortfolioHoldingResult {
+  ok?: boolean;
+  reason?: string;
+  action?: string;
+  deleted?: number;
   [k: string]: unknown;
 }
 
@@ -809,6 +839,12 @@ export interface MarketSnapshot {
 export const getPortfolioOverview = () => api<PortfolioOverview>('GET', '/api/portfolio/overview');
 export const getPortfolioStatus = () => api<PortfolioStatus>('GET', '/api/portfolio/status');
 export const syncPortfolio = () => api<PortfolioSyncResult>('POST', '/api/portfolio/sync');
+export const setPortfolioMode = (mode: 'manual' | 'snapshot') =>
+  api<PortfolioModeResult>('PUT', '/api/portfolio/mode', { mode });
+export const addPortfolioHolding = (body: { symbol: string; name?: string; market?: string; quantity: number; cost_price: number }) =>
+  api<PortfolioHoldingResult>('POST', '/api/portfolio/holdings', body);
+export const removePortfolioHolding = (symbol: string, market: string) =>
+  api<PortfolioHoldingResult>('DELETE', '/api/portfolio/holdings?symbol=' + encodeURIComponent(symbol) + '&market=' + encodeURIComponent(market));
 export const getNotifications = (limit = 10) => api<NotificationItem[]>('GET', '/api/notifications?limit=' + limit);
 export const getMarketSnapshot = (market: string) =>
   api<MarketSnapshot>('GET', '/api/summary/snapshot?market=' + encodeURIComponent(market));

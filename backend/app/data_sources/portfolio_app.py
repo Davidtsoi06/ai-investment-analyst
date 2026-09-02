@@ -1,58 +1,28 @@
 # -*- coding: utf-8 -*-
-"""个人理财软件数据对接（只读，双数据源）
+"""个人理财软件数据对接（快照文件单数据源）
 
-数据源优先级：
-1. portfolio_snapshot.json —— 理财软件 v1.10.14+ 导出到用户配置文件夹（本地文件交换，不触发杀毒误报）
-2. finance.db —— 直接只读读取（兜底，补充账户/交易/净值数据）
+V1.0.5 起不再直接读取理财软件 finance.db（安全软件误报与耦合问题），
+只读取理财软件导出的 portfolio_snapshot.json（v1.10.15+ 自动导出到
+用户配置的导出文件夹；默认 = 本软件数据目录 data/portfolio）。
 """
 
 import json
-import sqlite3
-import urllib.parse
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = Path.home() / 'AppData' / 'Roaming' / 'personal-finance' / 'finance.db'
 SNAPSHOT_FILE = 'portfolio_snapshot.json'
 
 MARKET_MAP = {'hk_stock': '港股', 'a_stock': 'A股', 'us_stock': '美股'}
 
 
-def detect_db() -> Path | None:
-    return DB_PATH if DB_PATH.exists() else None
-
-
-def _readonly_conn(path: Path) -> sqlite3.Connection:
-    """SQLite 只读模式打开（immutable=1：不创建 -shm，WAL 已 checkpoint 场景安全）"""
-    uri = 'file:' + urllib.parse.quote(str(path).replace('\\', '/'), safe='/') + '?mode=ro&immutable=1'
-    conn = sqlite3.connect(uri, uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 def detect_snapshot_folder() -> Path | None:
-    """探测理财软件导出的快照文件夹（优先级）：
-    1. 本软件默认数据目录 data/portfolio/
-    2. 理财软件配置的导出文件夹（读 finance.db app_settings，只读）
-    """
-    # 1) 默认目录：data/portfolio/portfolio_snapshot.json
+    """快照目录：本软件默认数据目录 data/portfolio（用户在理财软件中把
+    AI 导出文件夹指向此处）；为空/不存在返回 None"""
     from ..config import settings
     default_folder = settings.data_dir / 'portfolio'
     if (default_folder / SNAPSHOT_FILE).exists():
         return default_folder
-    # 2) 理财软件配置的文件夹
-    db = detect_db()
-    if db is not None:
-        try:
-            conn = _readonly_conn(db)
-            row = conn.execute("SELECT value FROM app_settings WHERE key = 'aiPortfolio.folder'").fetchone()
-            conn.close()
-            folder = row['value'] if row else ''
-            if folder and (Path(folder) / SNAPSHOT_FILE).exists():
-                return Path(folder)
-        except Exception:  # noqa: BLE001
-            pass
     return None
 
 
@@ -93,7 +63,7 @@ class FinanceSnapshot:
 
 
 def read_snapshot_json() -> FinanceSnapshot | None:
-    """读取理财软件导出的 portfolio_snapshot.json（优先数据源）"""
+    """读取理财软件导出的 portfolio_snapshot.json（唯一数据源）"""
     folder = detect_snapshot_folder()
     if folder is None:
         return None
@@ -141,70 +111,6 @@ def read_snapshot_json() -> FinanceSnapshot | None:
     )
 
 
-def read_snapshot_db() -> FinanceSnapshot | None:
-    """finance.db 直接读取（兜底数据源，补充账户/交易/净值）"""
-    path = detect_db()
-    if path is None:
-        return None
-    conn = _readonly_conn(path)
-    try:
-        holdings: list[FinanceHolding] = []
-        for r in conn.execute('SELECT * FROM assets WHERE quantity > 0 ORDER BY market_value DESC'):
-            holdings.append(FinanceHolding(
-                code=r['code'],
-                name=r['name'],
-                market=MARKET_MAP.get(r['market'], r['market'] or '未知'),
-                currency=r['currency'],
-                quantity=float(r['quantity'] or 0),
-                cost_price=float(r['cost_price'] or 0),
-                current_price=float(r['current_price'] or 0),
-                market_value=float(r['market_value'] or 0),
-                total_cost=float(r['total_cost'] or 0),
-                profit_loss=float(r['profit_loss'] or 0),
-                profit_loss_pct=float(r['profit_loss_pct'] or 0),
-            ))
-        accounts = [
-            FinanceAccount(
-                name=r['name'],
-                broker=r['broker'] or '',
-                currency=r['currency'],
-                cash_balance=float(r['cash_balance'] or 0),
-            )
-            for r in conn.execute('SELECT * FROM investment_accounts ORDER BY id')
-        ]
-        transactions = [
-            dict(r)
-            for r in conn.execute('SELECT * FROM transactions ORDER BY date DESC LIMIT 300')
-        ]
-        nw = conn.execute('SELECT * FROM net_worth_history ORDER BY date DESC LIMIT 1').fetchone()
-        nw_history = [
-            dict(r) for r in conn.execute(
-                'SELECT date, total_cash, total_investments, net_worth FROM net_worth_history ORDER BY date DESC LIMIT 180'
-            )
-        ]
-        return FinanceSnapshot(
-            holdings=holdings,
-            accounts=accounts,
-            transactions=transactions,
-            net_worth=dict(nw) if nw else {},
-            net_worth_history=nw_history,
-            synced_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        )
-    finally:
-        conn.close()
-
-
 def read_snapshot() -> FinanceSnapshot | None:
-    """读取快照：JSON 导出优先，finance.db 兜底"""
-    snap = read_snapshot_json()
-    if snap is not None and snap.holdings:
-        # JSON 快照有持仓时，用 finance.db 补充账户/交易/净值（若快照缺失）
-        if not snap.accounts and not snap.transactions and not snap.net_worth:
-            db_snap = read_snapshot_db()
-            if db_snap is not None:
-                snap.accounts = db_snap.accounts
-                snap.transactions = db_snap.transactions
-                snap.net_worth = db_snap.net_worth
-                snap.net_worth_history = db_snap.net_worth_history
-        return snap
-    return read_snapshot_db()
+    """读取快照（JSON 文件，唯一数据源；文件缺失/损坏返回 None）"""
+    return read_snapshot_json()

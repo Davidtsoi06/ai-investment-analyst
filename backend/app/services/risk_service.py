@@ -49,8 +49,11 @@ MIN_SAMPLES = 20               # Beta/回撤/夏普/VaR 最少样本数
 def _load_holdings() -> list[dict]:
     conn = get_connection()
     try:
+        from .portfolio_sync import get_mode
+        src = 'portfolio_app' if get_mode() == 'snapshot' else 'manual'
         rows = conn.execute(
-            'SELECT symbol, name, market, quantity, cost_price, current_price FROM holdings'
+            'SELECT symbol, name, market, quantity, cost_price, current_price FROM holdings WHERE source = ?',
+            (src,),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -384,7 +387,8 @@ def stress_test(scenario: str) -> dict:
         'scenario': scenario,
         'name': name,
         'estimated_loss': loss,
-        'estimated_loss_pct': round(loss_pct, 4),
+        # 统一为小数比例（0.15 = 15%），与 overview indicators 口径一致，前端统一 ×100
+        'estimated_loss_pct': round(loss_pct / 100.0, 6),
         'detail': detail,
     }
 

@@ -56,16 +56,20 @@ def _load_holding_rows() -> list[dict]:
     """持仓原始行（名称/代码/市场/成本）"""
     conn = get_connection()
     try:
+        from ..services.portfolio_sync import get_mode
+        src = 'portfolio_app' if get_mode() == 'snapshot' else 'manual'
         rows = conn.execute(
-            'SELECT symbol, name, market, quantity, cost_price, current_price FROM holdings ORDER BY market, symbol'
+            'SELECT symbol, name, market, quantity, cost_price, current_price FROM holdings WHERE source = ? ORDER BY market, symbol',
+            (src,),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def _extract_symbols(question: str) -> list[dict]:
-    """识别问题中的股票：6 位 A 股代码 / 5 位港股代码 / 持仓名称 / 常见股票名称"""
+def _extract_symbols(question: str, allow_external: bool = False) -> list[dict]:
+    """识别问题中的股票：6 位 A 股代码 / 5 位港股代码 / 持仓名称 / 常见股票名称；
+    allow_external=True 且本地无命中时，主动搜索外部行情源（东财 suggest，#8）"""
     found: list[dict] = []
     seen: set[tuple[str, str]] = set()
 
@@ -87,7 +91,76 @@ def _extract_symbols(question: str) -> list[dict]:
     for name, code in COMMON_STOCKS.items():
         if name in question:
             _add(code, name, 'A股')
+
+    # #8：本地无命中（非持仓/非常见股）时主动搜索外部，避免「无相关数据」式空答
+    if allow_external and not found:
+        for s in _search_external(question):
+            _add(s['symbol'], s['name'], s['market'])
     return found
+
+
+# ---------------- 外部搜索（#8：非持仓股票主动识别） ----------------
+
+_NAME_LEADS = (
+    '帮我看看', '帮忙看看', '帮我分析', '帮忙分析', '帮我查查', '帮我查', '想问问', '想了解',
+    '想查查', '请问', '查一下', '看下', '看一下', '了解下', '了解', '分析下', '分析一下',
+    '介绍下', '说下', '讲讲', '评价下', '问下', '咨询下', '有没有',
+)
+_STOCK_SUFFIX = (
+    '怎么样', '如何', '可以买吗', '能买吗', '值得买吗', '值得买', '买不买', '该不该买',
+    '该不该卖', '要不要卖', '什么情况', '怎么看', '走势如何', '后市如何', '后市', '还能买吗',
+    '还能买', '还能拿吗', '还能涨吗', '现在能买', '现在买', '可以买', '适合买', '贵不贵',
+    '有没有投资价值', '这只股票', '这股票', '这只票', '这票', '股票怎么样', '表现如何',
+    '行情如何', '基本面', '估值', '财报', '业绩',
+)
+
+
+def _guess_stock_keywords(question: str) -> list[str]:
+    """从问句提取「股票名」候选（中文 2~10 字后紧跟意图词），如：
+    『帮我看看小米集团怎么样』→ ['小米集团']；『比亚迪现在能买吗』→ ['比亚迪']"""
+    q = question.strip()
+    for lead in _NAME_LEADS:
+        if q.startswith(lead):
+            q = q[len(lead):]
+            break
+    suffix_pat = '|'.join(_STOCK_SUFFIX)
+    out: list[str] = []
+    for m in re.finditer(r'([一-龥A-Za-z]{2,10}?)(?=' + suffix_pat + ')', q):
+        kw = m.group(1).strip()
+        # 过滤通用词（非股票名）
+        if kw in ('怎么', '什么', '可以', '现在', '今天', '最近', '还有', '应该', '没有', '这个'):
+            continue
+        if any(lead in kw for lead in ('帮我', '请问', '看看', '分析')):
+            continue
+        if kw not in out:
+            out.append(kw)
+    return out[:3]
+
+
+def _search_external(question: str) -> list[dict]:
+    """东财 suggest 名称→代码兜底搜索（网络失败静默返回空，不阻塞主流程）"""
+    try:
+        from ..data_sources.market.stock_search import search_stocks, normalize_name
+        results: list[dict] = []
+        for kw in _guess_stock_keywords(question):
+            for s in search_stocks(kw, 3):
+                nm = normalize_name(s.get('name') or '') or s.get('name') or ''
+                # 结果名称必须与问句相关（名称出现在问句中，或关键词出现在结果名中）
+                if kw in question and (kw in nm or nm in question or s.get('symbol') in question):
+                    results.append(s)
+        seen: set[tuple[str, str]] = set()
+        dedup: list[dict] = []
+        for s in results:
+            k = (s.get('market'), s.get('symbol'))
+            if k not in seen:
+                seen.add(k)
+                dedup.append(s)
+        if dedup:
+            logger.info('外部搜索识别到股票: %s', '、'.join(f"{s['name']}({s['symbol']})" for s in dedup))
+        return dedup[:3]
+    except Exception as e:  # noqa: BLE001
+        logger.warning('外部股票搜索兜底失败: %s', str(e)[:100])
+        return []
 
 
 # ---------------- 上下文构建 ----------------
@@ -183,9 +256,12 @@ def _load_news(limit: int = 5) -> list[dict]:
 
 
 def build_context(question: str) -> dict:
-    """构建问答上下文：问题分类 + 识别股票（行情/指标摘要）+ 用户画像 + 持仓 + 最近资讯"""
+    """构建问答上下文：问题分类 + 识别股票（行情/指标摘要，含外部搜索兜底）+ 用户画像 + 持仓 + 最近资讯"""
     category = classify_question(question)
-    symbols = _extract_symbols(question)
+    symbols = _extract_symbols(question, allow_external=True)
+    # 外部搜索兜底命中具体股票时，把笼统分类细化为个股分析（降级回答可输出行情）
+    if category == '综合' and symbols:
+        category = '个股分析'
     symbol_ctx: list[dict] = []
     for s in symbols:
         symbol_ctx.append({

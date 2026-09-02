@@ -15,7 +15,7 @@ from .config import settings
 from .models.database import init_db
 from .services.logger import get_app_logger
 from .services.scheduler import start_scheduler, stop_scheduler
-from .services.portfolio_sync import sync_now, portfolio_status, register_hourly_sync
+from .services.portfolio_sync import sync_now, portfolio_status, register_hourly_sync, get_mode, set_mode, upsert_manual_holding, delete_manual_holding
 from .services.notification import send_notification, list_notifications
 from .services.settings_service import get_setting, set_setting
 from .services.trading_calendar import is_trading_day
@@ -372,10 +372,37 @@ def notifications_get(limit: int = Query(30, ge=1, le=200), x_backend_token: str
     return list_notifications(limit)
 
 
+class PortfolioModeIn(BaseModel):
+    mode: str = Field(..., description='持仓数据模式：manual 手动录入 / snapshot 快照文件')
+
+
+class PortfolioHoldingIn(BaseModel):
+    symbol: str = Field(..., min_length=1, description='股票代码，如 600519 / 00700')
+    name: str = ''
+    market: str = 'A股'
+    currency: str = 'CNY'
+    quantity: float = Field(..., gt=0, description='持仓数量')
+    cost_price: float = Field(..., ge=0, description='成本价')
+
+
 @app.get("/api/portfolio/status")
 def portfolio_status_api(x_backend_token: str = Header(default="")):
     require_token(x_backend_token)
     return portfolio_status()
+
+
+@app.get("/api/portfolio/mode")
+def portfolio_mode_get(x_backend_token: str = Header(default="")):
+    """持仓数据模式：manual / snapshot（含快照检测与各来源数量）"""
+    require_token(x_backend_token)
+    return portfolio_status()
+
+
+@app.put("/api/portfolio/mode")
+def portfolio_mode_put(body: PortfolioModeIn, x_backend_token: str = Header(default="")):
+    """切换持仓数据模式（manual ↔ snapshot）"""
+    require_token(x_backend_token)
+    return set_mode(body.mode)
 
 
 @app.post("/api/portfolio/sync")
@@ -384,17 +411,35 @@ def portfolio_sync_api(x_backend_token: str = Header(default="")):
     return sync_now()
 
 
+@app.post("/api/portfolio/holdings")
+def portfolio_holding_upsert(body: PortfolioHoldingIn, x_backend_token: str = Header(default="")):
+    """手动录入/更新持仓（同代码+市场覆盖数量与成本价）"""
+    require_token(x_backend_token)
+    return upsert_manual_holding(body.symbol, body.name, body.market, body.quantity, body.cost_price, body.currency)
+
+
+@app.delete("/api/portfolio/holdings")
+def portfolio_holding_delete(symbol: str = Query(..., min_length=1), market: str = Query('A股'),
+                             x_backend_token: str = Header(default="")):
+    """删除手动持仓（按代码+市场）"""
+    require_token(x_backend_token)
+    return delete_manual_holding(symbol, market)
+
+
 @app.get("/api/portfolio/overview")
 def portfolio_overview_api(x_backend_token: str = Header(default="")):
-    """持仓总览：本地 holdings 明细 + 理财软件快照（账户/净值）"""
+    """持仓总览：按当前模式过滤的本地 holdings 明细 + 快照（账户/净值，仅快照模式）"""
     require_token(x_backend_token)
     import json as _json
+    mode = get_mode()
+    src = 'portfolio_app' if mode == 'snapshot' else 'manual'
     conn = get_connection()
     try:
         holdings = [
             dict(r)
             for r in conn.execute(
-                "SELECT symbol, name, market, currency, quantity, cost_price, current_price, source, sync_at FROM holdings ORDER BY source, market"
+                "SELECT symbol, name, market, currency, quantity, cost_price, current_price, source, sync_at FROM holdings WHERE source = ? ORDER BY market, symbol",
+                (src,),
             )
         ]
         row = conn.execute(
@@ -404,8 +449,9 @@ def portfolio_overview_api(x_backend_token: str = Header(default="")):
         conn.close()
     snapshot = _json.loads(row['value']) if row else None
     return {
+        "mode": mode,
         "holdings": holdings,
-        "snapshot": snapshot,
+        "snapshot": snapshot if mode == 'snapshot' else None,
         "status": portfolio_status(),
     }
 

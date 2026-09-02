@@ -4,11 +4,11 @@
 
 数据收集：
   - 持仓盈亏：holdings × 实时行情（data_fusion）
-  - 交易记录：理财软件快照 portfolio_snapshot_v1.transactions（近 N 条，按区间过滤；资产名/代码
-    通过 finance.db 只读 assets 表补全，失败降级为 asset_id）
+  - 交易记录：理财软件快照 portfolio_snapshot_v1.transactions（近 N 条，按区间过滤；
+    快照自带 assetCode/assetName，缺失时以 asset_id 展示，不读 finance.db）
   - 推荐回测：backtest_service.get_backtest_report()（胜率/平均收益/累计收益）
   - 跟踪事件数：tracking_events（区间内，北京时间）
-  - 净值历史：finance.db net_worth_history 只读（区间初 vs 最新，月度对比）；失败降级快照最新净值
+  - 净值历史：快照 net_worth_history（区间初 vs 最新）；缺失降级快照最新净值
 
 行为分析（模块八）：
   - 有 Key：DeepSeek 基于 交易频率/持仓集中/推荐跟随率/已实现盈亏 等特征输出
@@ -71,8 +71,11 @@ def _load_holdings() -> list[dict]:
     """本地持仓 + 实时行情估值：市值 / 浮动盈亏（行情失败跳过估值）"""
     conn = get_connection()
     try:
+        from ..services.portfolio_sync import get_mode
+        src = 'portfolio_app' if get_mode() == 'snapshot' else 'manual'
         rows = conn.execute(
-            "SELECT symbol, name, market, quantity, cost_price, current_price FROM holdings ORDER BY market, symbol"
+            "SELECT symbol, name, market, quantity, cost_price, current_price FROM holdings WHERE source = ? ORDER BY market, symbol",
+            (src,),
         ).fetchall()
     finally:
         conn.close()
@@ -98,24 +101,6 @@ def _load_holdings() -> list[dict]:
     return result
 
 
-def _asset_map() -> dict[int, dict]:
-    """finance.db assets 只读映射 asset_id -> {code, name, market}；失败返回空表"""
-    try:
-        from ..data_sources.portfolio_app import _readonly_conn, detect_db
-        path = detect_db()
-        if path is None:
-            return {}
-        conn = _readonly_conn(path)
-        try:
-            result: dict[int, dict] = {}
-            for r in conn.execute('SELECT id, code, name, market FROM assets'):
-                result[int(r['id'])] = {'code': r['code'], 'name': r['name'], 'market': r['market']}
-            return result
-        finally:
-            conn.close()
-    except Exception as e:  # noqa: BLE001
-        logger.warning('资产映射读取失败（降级 asset_id）: %s', str(e)[:100])
-        return {}
 
 
 def _load_transactions(period_start: str, period_end: str) -> list[dict]:
@@ -134,9 +119,8 @@ def _load_transactions(period_start: str, period_end: str) -> list[dict]:
     except (ValueError, TypeError):
         return []
     raw = snapshot.get('transactions') or []
-    asset_map = _asset_map()
 
-    # 区间内交易（date 为 YYYY-MM-DD）；快照新格式自带 assetCode/assetName（不依赖 finance.db）
+    # 区间内交易（date 为 YYYY-MM-DD）；快照格式自带 assetCode/assetName，无 finance.db 兜底
     items: list[dict] = []
     for t in raw:
         d = str(t.get('date') or '')[:10]
@@ -145,11 +129,6 @@ def _load_transactions(period_start: str, period_end: str) -> list[dict]:
         code = t.get('assetCode') or t.get('asset_code') or ''
         name = t.get('assetName') or t.get('asset_name') or ''
         market = t.get('market') or ''
-        if not code and not name:
-            asset = asset_map.get(int(t.get('asset_id') or 0)) or {}
-            code = asset.get('code') or ''
-            name = asset.get('name') or ''
-            market = asset.get('market') or ''
         items.append({
             'asset_id': t.get('asset_id'),
             'symbol': code,
@@ -208,7 +187,7 @@ def _load_tracking_events(period_start: str, period_end: str) -> int:
 
 
 def _load_net_worth(period_start: str) -> dict:
-    """净值：优先快照净值历史（180 天，理财软件导出），其次 finance.db；最后降级最新值"""
+    """净值：快照净值历史（180 天，理财软件导出）；缺失则降级快照最新净值"""
     result: dict = {'latest': None, 'start': None, 'change_pct': None}
 
     def _from_history(history: list) -> None:
@@ -248,23 +227,6 @@ def _load_net_worth(period_start: str) -> dict:
             _from_history(snap.get('net_worth_history') or [])
         except (ValueError, TypeError):
             pass
-    if result['latest'] is None:
-        try:
-            from ..data_sources.portfolio_app import _readonly_conn, detect_db
-            path = detect_db()
-            if path is not None:
-                conn = _readonly_conn(path)
-                try:
-                    history = [
-                        dict(r) for r in conn.execute(
-                            'SELECT date, net_worth FROM net_worth_history ORDER BY date DESC LIMIT 180'
-                        )
-                    ]
-                finally:
-                    conn.close()
-                _from_history(history)
-        except Exception as e:  # noqa: BLE001
-            logger.warning('净值历史读取失败: %s', str(e)[:100])
     if result['latest'] is None and snap_row:
         try:
             nw = json.loads(snap_row['value']).get('net_worth') or {}

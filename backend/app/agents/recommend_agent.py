@@ -45,10 +45,12 @@ def _load_profile() -> dict:
 
 
 def _load_holdings() -> list[dict]:
+    from ..services.portfolio_sync import get_mode
+    src = 'portfolio_app' if get_mode() == 'snapshot' else 'manual'
     conn = get_connection()
     try:
         rows = conn.execute(
-            'SELECT symbol, name, market FROM holdings'
+            'SELECT symbol, name, market FROM holdings WHERE source = ?', (src,)
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -378,7 +380,8 @@ def generate_recommendations(force: bool = False) -> dict:
         if existing:
             return {'ok': True, 'date': today, 'cached': True,
                     'source': 'ai' if any('AI' in (it.get('logic') or '') for it in existing) else 'rules',
-                    'items': existing, 'blocked': [], 'errors': []}
+                    'items': existing, 'blocked': [], 'errors': [],
+                    'candidate_count': 0, 'pool_size': 0, 'empty_reason': None}
 
     candidates = _candidate_pool(profile)
     holdings = _load_holdings()
@@ -452,6 +455,17 @@ def generate_recommendations(force: bool = False) -> dict:
     logger.info('推荐生成完成: 候选 %d → 规则 %d / AI %s → 通过约束 %d / 拦截 %d',
                 len(enriched), len(rule_entries), source, saved, len(result['blocked']))
 
+    # 无推荐时的可读原因（供前端展示，替代笼统的「今日暂无推荐」）
+    empty_reason = None
+    if not result['passed']:
+        if not enriched:
+            empty_reason = ('候选股票行情获取全部失败，未能完成分析' if errors
+                            else '候选池为空（自选股未添加且无可用兜底），无法生成推荐')
+        elif rule_entries and result['blocked']:
+            empty_reason = f'分析了 {len(enriched)} 只候选：{len(rule_entries)} 条初选全部被约束规则拦截'
+        else:
+            empty_reason = f'分析了 {len(enriched)} 只候选股票，均未达到推荐标准（技术/估值评分不足），今日不生成推荐'
+
     return {
         'ok': True,
         'date': today,
@@ -460,4 +474,7 @@ def generate_recommendations(force: bool = False) -> dict:
         'items': _load_today(today),
         'blocked': result['blocked'],
         'errors': errors,
+        'candidate_count': len(enriched),
+        'pool_size': len(candidates),
+        'empty_reason': empty_reason,
     }

@@ -161,13 +161,15 @@ interface MetricCardProps {
   label: string;
   value: string;
   hint?: string;
+  /** 通俗解读（新手友好，大白话说明指标含义与怎么看） */
+  explain?: string;
   /** normal | danger | warning（预警项红色边框） */
   tone?: 'normal' | 'danger' | 'warning';
   /** 警示徽章文字 */
   alertLabel?: string;
 }
 
-function MetricCard({ label, value, hint, tone = 'normal', alertLabel }: MetricCardProps) {
+function MetricCard({ label, value, hint, explain, tone = 'normal', alertLabel }: MetricCardProps) {
   const border =
     tone === 'danger' ? 'border-danger/70' : tone === 'warning' ? 'border-warning/70' : 'border-border';
   const valueCls =
@@ -180,6 +182,7 @@ function MetricCard({ label, value, hint, tone = 'normal', alertLabel }: MetricC
       </div>
       <div className={'text-xl font-bold font-number ' + valueCls}>{value}</div>
       {hint && <div className="text-xs text-text-muted">{hint}</div>}
+      {explain && <div className="text-[11px] leading-4 text-text-secondary/80 mt-0.5">{explain}</div>}
     </div>
   );
 }
@@ -203,10 +206,12 @@ function renderDetail(detail: StressTestResult['detail'], keyPrefix: string) {
           const obj = it && typeof it === 'object' ? (it as Record<string, unknown>) : null;
           const pctVal = obj ? obj.loss_pct ?? obj.weight_pct : undefined;
           const name = obj ? String(obj.name ?? obj.symbol ?? JSON.stringify(it)) : String(it);
+          const valN = obj && obj.value !== undefined && pctVal === undefined ? Number(obj.value) : NaN;
           return (
             <li key={keyPrefix + '-a' + i} className="text-sm text-text-secondary leading-6">
               {name}
               {pctVal !== undefined ? ' · ' + fmtPct(Number(pctVal)) : ''}
+              {Number.isFinite(valN) ? ' · ' + fmtMoney(valN) : ''}
             </li>
           );
         })}
@@ -350,6 +355,19 @@ export default function Risk() {
     return Array.isArray(d) ? (d as RiskConcentrationItem[]) : [];
   }, [ind]);
 
+  // market_share 为 {A股: 0.4, 港股: 0.6} 对象 → 排序数组（0.6 = 60%）
+  const marketShareTop = useMemo(() => {
+    const m = ind?.market_share;
+    const arr: { market: string; share: number }[] = [];
+    if (m && typeof m === 'object') {
+      for (const [mk, v] of Object.entries(m as Record<string, unknown>)) {
+        const n = Number(v);
+        if (Number.isFinite(n)) arr.push({ market: mk, share: n });
+      }
+    }
+    return arr.sort((a, b) => b.share - a.share);
+  }, [ind]);
+
   // ---- 宏观派生数据 ----
   const signal = resolveMacroLevel(macro);
   const signalMeta = SIGNAL_META[signal];
@@ -399,18 +417,21 @@ export default function Risk() {
         ) : (
           <>
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
-              <MetricCard label="组合总市值" value={fmtMoney(overview.total_value)} hint="全部持仓按现价估算" />
+              <MetricCard label="组合总市值" value={fmtMoney(overview.total_value)} hint="全部持仓按现价估算"
+                explain="你的全部持仓按当前市价合计值多少钱（不含现金）。市值越大，整体涨跌的金额影响也越大。" />
               <MetricCard
                 label="单只最大集中度"
                 value={fmtPct(ind?.concentration_max)}
                 hint={concentrationDetail.length > 0 ? '最大持仓：' + (concentrationDetail[0]?.name || concentrationDetail[0]?.symbol || '—') : '超过 20% 预警'}
+                explain="最重仓的一只股票占组合的比例。超过 20% 说明押注这只股票过重——它一旦大跌，会明显拖累整体收益。"
                 tone={alertKeys.has('concentration') ? 'danger' : 'normal'}
                 alertLabel={alertKeys.has('concentration') ? '预警' : undefined}
               />
               <MetricCard
                 label="最高市场占比"
-                value={fmtPct(ind?.market_share)}
-                hint="A股/港股 按市值占比"
+                value={fmtPct(Number(marketShareTop[0]?.share) || 0)}
+                hint={marketShareTop.length > 0 ? marketShareTop.map((m) => m.market + ' ' + fmtPct(m.share)).join(' · ') : 'A股/港股 按市值占比'}
+                explain="A股或港股的市值占组合的比例。超过 40% 说明你主要押注单一市场，跨市场分散不足。"
                 tone={alertKeys.has('market') ? 'danger' : 'normal'}
                 alertLabel={alertKeys.has('market') ? '预警' : undefined}
               />
@@ -418,6 +439,7 @@ export default function Risk() {
                 label="最大回撤"
                 value={fmtPct(drawdownDisplay(ind?.max_drawdown))}
                 hint="按 60 日 K 线组合净值估算"
+                explain="最近 60 个交易日里，组合从高点最多回落了多少。数值越大说明波动越剧烈，扛单体验越差。"
                 tone={alertKeys.has('drawdown') ? 'warning' : 'normal'}
                 alertLabel={alertKeys.has('drawdown') ? '关注' : undefined}
               />
@@ -425,6 +447,7 @@ export default function Risk() {
                 label="Beta"
                 value={fmtNum(ind?.beta)}
                 hint="对大盘指数 · 大于 1.5 提示"
+                explain="组合相对大盘的波动倍数：1 表示与大盘同步；大于 1 涨跌都比大盘更猛；小于 1 更稳。"
                 tone={alertKeys.has('beta') ? 'warning' : 'normal'}
                 alertLabel={alertKeys.has('beta') ? '关注' : undefined}
               />
@@ -432,6 +455,7 @@ export default function Risk() {
                 label="夏普比率"
                 value={fmtNum(ind?.sharpe)}
                 hint="年化 · 无风险利率 2% · 小于 0 提示"
+                explain="每承受一份波动换来多少超额回报，越高说明「性价比」越好；小于 0 表示收益跑不赢国债。"
                 tone={alertKeys.has('sharpe') ? 'danger' : 'normal'}
                 alertLabel={alertKeys.has('sharpe') ? '预警' : undefined}
               />
@@ -439,6 +463,7 @@ export default function Risk() {
                 label="VaR（95% 日损失）"
                 value={fmtMoney(ind?.var)}
                 hint="历史模拟法 · 单日最大可能损失"
+                explain="按历史波动估算：95% 的概率单日亏损不超过这个金额（仍有 5% 概率亏更多）。"
                 tone={alertKeys.has('var') ? 'danger' : 'normal'}
                 alertLabel={alertKeys.has('var') ? '预警' : undefined}
               />
@@ -453,8 +478,8 @@ export default function Risk() {
                     <span key={c.symbol || c.name || i} className="inline-flex items-center gap-2 text-xs bg-bg-secondary border border-border rounded px-2 py-1">
                       <span className="font-medium">{c.name || c.symbol || '—'}</span>
                       <span className="text-text-muted">{c.market || ''}</span>
-                      <span className={'font-number ' + (concPct(c.weight_pct ?? c.value) > 20 ? 'text-danger' : 'text-text-secondary')}>
-                        {fmtPct(c.weight_pct ?? c.value)}
+                      <span className={'font-number ' + (concPct(c.weight ?? c.weight_pct ?? 0) > 20 ? 'text-danger' : 'text-text-secondary')}>
+                        {fmtPct(c.weight ?? c.weight_pct ?? 0)}
                       </span>
                     </span>
                   ))}
@@ -470,14 +495,26 @@ export default function Risk() {
                   <span className="text-xs text-text-muted">{alerts.length} 项超限</span>
                 </div>
                 <ul className="space-y-1.5">
-                  {alerts.map((a, i) => (
-                    <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                      <Badge variant={alertBadgeVariant(a.level)}>{a.level || '预警'}</Badge>
-                      <span className="font-medium">{String(a.indicator ?? '')}</span>
-                      <span className="text-text-secondary font-number">当前 {fmtPct(a.value)}</span>
-                      <span className="text-text-muted">阈值 {fmtPct(a.threshold)}</span>
-                    </li>
-                  ))}
+                  {alerts.map((a, i) => {
+                    // 按指标类型格式化：集中度/占比/回撤=百分数（小数×100），Beta/夏普=数值，VaR=金额
+                    const key = alertMetricKey(a.indicator);
+                    const fmtCur = (v: unknown) => {
+                      if (v === null || v === undefined || v === '') return '—';
+                      const n = typeof v === 'number' ? v : Number(v);
+                      if (!Number.isFinite(n)) return String(v);
+                      if (key === 'beta' || key === 'sharpe') return fmtNum(n);
+                      if (key === 'var') return fmtMoney(n);
+                      return fmtPct(n);
+                    };
+                    return (
+                      <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                        <Badge variant={alertBadgeVariant(a.level)}>{a.level || '预警'}</Badge>
+                        <span className="font-medium">{String(a.indicator ?? '')}</span>
+                        <span className="text-text-secondary font-number">当前 {fmtCur(a.value)}</span>
+                        <span className="text-text-muted">阈值 {fmtCur(a.threshold)}</span>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             )}
