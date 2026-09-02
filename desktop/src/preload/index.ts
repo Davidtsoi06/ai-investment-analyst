@@ -16,3 +16,16 @@ contextBridge.exposeInMainWorld('backend', {
     ipcRenderer.invoke('backend:request', { method, path, body }),
   status: () => ipcRenderer.invoke('backend:status'),
 });
+
+// 应用更新（对齐理财软件：检查/下载/安装 + 状态事件）
+contextBridge.exposeInMainWorld('updater', {
+  getVersion: () => ipcRenderer.invoke('update:getVersion'),
+  check: () => ipcRenderer.invoke('update:check'),
+  download: () => ipcRenderer.invoke('update:download'),
+  install: () => ipcRenderer.invoke('update:install'),
+  onStatus: (cb: (data: Record<string, unknown>) => void) => {
+    const h = (_e: unknown, data: Record<string, unknown>) => cb(data);
+    ipcRenderer.on('update:status', h);
+    return () => ipcRenderer.removeListener('update:status', h);
+  },
+});

@@ -138,14 +138,28 @@ class BackendManager {
   }
 
   async request(method: string, path: string, body?: unknown): Promise<unknown> {
-    const res = await fetch(`${this.backendUrl()}${path}`, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Backend-Token': this.token,
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    // E: 请求 60 秒超时（AbortController），避免慢接口无限等待
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60_000);
+    let res: Response;
+    try {
+      res = await fetch(this.backendUrl() + path, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Backend-Token': this.token,
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      const msg = e instanceof Error && e.name === 'AbortError'
+        ? '请求超时（后端处理超过 60 秒）'
+        : '无法连接后端: ' + (e instanceof Error ? e.message : String(e));
+      return { ok: false, status: 0, error: msg };
+    }
+    clearTimeout(timer);
     const text = await res.text();
     let json: unknown = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = text; }

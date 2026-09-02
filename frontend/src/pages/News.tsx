@@ -55,7 +55,7 @@ export default function News() {
 
   const refresh = async () => {
     setLoading(true);
-    setMsg({ type: 'ok', text: '抓取整合中...' });
+    setMsg({ type: 'ok', text: '正在抓取多源资讯（约 3~10 秒）...' });
     const r = await api<{ ok: boolean; fetched?: number; saved?: number }>('POST', '/api/news/premarket/run');
     if (r.ok && r.data?.ok) setMsg({ type: 'ok', text: `整合完成：抓取 ${r.data.fetched} 条 / 新增 ${r.data.saved} 条` });
     else setMsg({ type: 'err', text: '抓取失败：' + ((r.data as { reason?: string })?.reason || parseApiError(r.error)) });

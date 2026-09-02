@@ -31,7 +31,8 @@ def get_kline(market: str, symbol: str, days: int = 120) -> list[KLineBar] | Non
         'end': end,
     }
     import json
-    text = get(KLINE_URL, params=params)
+    # G: 重试 1 次即可，失败快速切换到备用源（避免长时间阻塞推荐/盘后等调用）
+    text = get(KLINE_URL, params=params, retries=1)
     data = json.loads(text)
     klines = (data.get('data') or {}).get('klines') or []
     bars: list[KLineBar] = []

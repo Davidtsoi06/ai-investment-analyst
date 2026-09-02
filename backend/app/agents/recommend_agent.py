@@ -10,6 +10,7 @@
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 
 from ..data_sources.market.data_fusion import data_fusion
@@ -383,30 +384,39 @@ def generate_recommendations(force: bool = False) -> dict:
     holdings = _load_holdings()
     enriched: list[dict] = []
     errors: list[str] = []
-    for cand in candidates:
+
+    def _enrich_one(cand: dict) -> tuple[dict | None, str | None]:
+        """单只候选分析（供并行执行）"""
         try:
             quote = data_fusion.get_quote(cand['symbol'], cand['market'])
             if quote is None:
-                errors.append(f"{cand['symbol']}：行情获取失败")
-                continue
+                return None, f"{cand['symbol']}：行情获取失败"
             bars = data_fusion.get_kline(cand['symbol'], cand['market'], 120)
             if not bars:
-                errors.append(f"{cand['symbol']}：K线获取失败")
-                continue
+                return None, f"{cand['symbol']}：K线获取失败"
             snap = indicator_snapshot(bars)
             if not snap:
-                errors.append(f"{cand['symbol']}：指标计算失败")
-                continue
-            enriched.append({
+                return None, f"{cand['symbol']}：指标计算失败"
+            return {
                 'symbol': cand['symbol'], 'name': quote.name or cand['name'],
                 'market': cand['market'], 'price': float(quote.price),
                 'change_pct': quote.change_pct,
                 'quote': quote, 'snap': snap,
                 'news': _related_news(quote.name or cand['name'], cand['symbol']),
-            })
+            }, None
         except Exception as e:  # noqa: BLE001
             logger.warning('候选股 %s 分析失败: %s', cand['symbol'], str(e)[:100])
-            errors.append(f"{cand['symbol']}：{str(e)[:60]}")
+            return None, f"{cand['symbol']}：{str(e)[:60]}"
+
+    # D: 并行拉取行情与 K 线（串行 23s -> 并行 ~5s）
+    with ThreadPoolExecutor(max_workers=min(6, max(1, len(candidates)))) as ex:
+        futures = {ex.submit(_enrich_one, cand): cand for cand in candidates}
+        for fut in as_completed(futures):
+            entry, err = fut.result()
+            if entry is not None:
+                enriched.append(entry)
+            elif err:
+                errors.append(err)
 
     # 1) 规则引擎保底
     rule_entries: list[dict] = []

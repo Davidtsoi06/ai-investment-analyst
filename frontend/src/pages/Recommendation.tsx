@@ -230,7 +230,7 @@ export default function Recommendation() {
             {todayLoading ? '刷新中...' : '刷新'}
           </Button>
           <Button onClick={handleGenerate} disabled={generating}>
-            {generating ? '生成中...' : '生成今日推荐'}
+            {generating ? '正在分析候选股票（约 5~15 秒）...' : '生成今日推荐'}
           </Button>
         </div>
       </div>

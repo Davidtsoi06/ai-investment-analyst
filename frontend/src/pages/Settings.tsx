@@ -26,6 +26,44 @@ export default function Settings() {
   const [aiMsg, setAiMsg] = useState('');
   const [backendStatus, setBackendStatus] = useState<{ running: boolean; version: string | null } | null>(null);
   const [savedMsg, setSavedMsg] = useState('');
+  // 版本更新状态（对齐理财软件）
+  const [updVersion, setUpdVersion] = useState('');
+  const [updPhase, setUpdPhase] = useState<'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'error'>('idle');
+  const [updLatest, setUpdLatest] = useState('');
+  const [updPercent, setUpdPercent] = useState(0);
+  const [updMsg, setUpdMsg] = useState('');
+  const [updError, setUpdError] = useState('');
+
+  useEffect(() => {
+    if (!window.updater) return;
+    window.updater.getVersion().then((v) => { if (v?.version) setUpdVersion(v.version); }).catch(() => {});
+    const off = window.updater.onStatus((data) => {
+      switch (data.event) {
+        case 'checking-for-update': setUpdPhase('checking'); setUpdError(''); break;
+        case 'update-available': setUpdPhase('available'); setUpdLatest(String(data.version || '')); break;
+        case 'update-not-available': setUpdPhase('idle'); setUpdMsg('已是最新版本'); break;
+        case 'download-progress': setUpdPhase('downloading'); setUpdPercent(Number(data.percent) || 0); break;
+        case 'update-downloaded': setUpdPhase('downloaded'); setUpdLatest(String(data.version || updLatest)); break;
+        case 'update-error': setUpdPhase('error'); setUpdError(String((data as { message?: string }).message || '更新出错')); break;
+      }
+    });
+    return () => { off(); };
+  }, []);
+
+  const checkUpdate = async () => {
+    if (!window.updater) return;
+    setUpdPhase('checking'); setUpdMsg(''); setUpdError('');
+    const r = await window.updater.check();
+    if (!r.updateAvailable) { setUpdPhase('idle'); setUpdMsg(r.message || (r.error ? '检查失败：' + r.error : '已是最新版本')); if (r.error) setUpdError(r.error); }
+    else { setUpdPhase('available'); setUpdLatest(r.latestVersion || ''); }
+  };
+  const downloadUpdate = async () => {
+    if (!window.updater) return;
+    setUpdPhase('downloading'); setUpdError('');
+    const r = await window.updater.download();
+    if (!r.success) { setUpdPhase('error'); setUpdError(r.error || '下载失败'); }
+  };
+  const installUpdate = () => { window.updater?.install(); };
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -154,6 +192,42 @@ export default function Settings() {
       <div className="flex justify-end">
         <Button onClick={save} disabled={saving}>{saving ? '保存中...' : '保存设置'}</Button>
       </div>
+
+      <Card>
+        <div className="flex items-center gap-3 mb-3">
+          <h2 className="font-bold text-sm">版本更新</h2>
+          {updVersion && <Badge variant="info">当前 v{updVersion}</Badge>}
+        </div>
+        {!window.updater ? (
+          <p className="text-xs text-text-muted">更新功能仅在安装版（正式安装包）中可用，开发模式不生效。</p>
+        ) : updPhase === 'checking' ? (
+          <p className="text-sm text-text-secondary">正在检查更新...</p>
+        ) : updPhase === 'available' ? (
+          <div className="space-y-2">
+            <p className="text-sm">发现新版本 <span className="font-bold text-primary-700">v{updLatest}</span></p>
+            <Button size="sm" onClick={downloadUpdate}>下载更新</Button>
+            {updError && <p className="text-xs text-danger">{updError}</p>}
+          </div>
+        ) : updPhase === 'downloading' ? (
+          <div>
+            <div className="h-2 bg-primary-100 rounded-full overflow-hidden">
+              <div className="h-full bg-primary-500 transition-all" style={{ width: updPercent + '%' }} />
+            </div>
+            <p className="text-xs text-text-secondary mt-1">正在下载更新... {updPercent}%</p>
+          </div>
+        ) : updPhase === 'downloaded' ? (
+          <div className="space-y-2">
+            <p className="text-sm text-success">更新已下载完成 ✅</p>
+            <Button size="sm" onClick={installUpdate}>重启并安装</Button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={checkUpdate}>检查更新</Button>
+            {updMsg && <span className="text-xs text-text-secondary">{updMsg}</span>}
+            {updError && <span className="text-xs text-danger">{updError}</span>}
+          </div>
+        )}
+      </Card>
 
       <Card>
         <h2 className="font-bold mb-2 text-sm">关于</h2>

@@ -2,8 +2,8 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import { createWindow } from './window';
 import { createTray } from './tray';
-import { setupUpdater } from './updater';
 import { backendManager } from './backend';
+import { setupUpdater, registerUpdateIpc } from './updater';
 import { log } from './logger';
 
 // F: 统一用户数据目录为英文名（与后端一致），避免双目录困惑
@@ -26,6 +26,10 @@ if (!app.requestSingleInstanceLock()) {
       if (win.isMinimized()) win.restore();
       win.show();
       win.focus();
+    } else {
+      // A: 窗口已关闭（驻留托盘）时，再次双击直接重建窗口
+      log('INFO', 'second-instance：无窗口，重建主窗口');
+      createWindow();
     }
   });
 
@@ -33,6 +37,7 @@ if (!app.requestSingleInstanceLock()) {
     createWindow();
     createTray();
     setupUpdater();
+    registerUpdateIpc();
     void backendManager.start(); // 拉起后端（不阻塞窗口）
 
     app.on('activate', () => {
@@ -46,6 +51,9 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on('before-quit', () => {
+    // C: 标记退出中（窗口关闭逻辑据此放行），并停止后端进程
+    (app as { isQuitting?: boolean }).isQuitting = true;
     void backendManager.stop();
+    log('INFO', '应用退出中');
   });
 }
