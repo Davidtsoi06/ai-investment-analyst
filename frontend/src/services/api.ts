@@ -9,8 +9,12 @@ export interface ApiResult<T = unknown> {
 
 export async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {
   if (window.backend) {
-    const res = (await window.backend.request(method, path, body)) as ApiResult<T>;
-    return res;
+    // 主进程：HTTP 错误返回 {ok:false, status, error}；成功返回后端 JSON（可能含业务 ok 字段）
+    const raw = (await window.backend.request(method, path, body)) as Record<string, unknown> | null;
+    if (raw && raw.ok === false) {
+      return raw as unknown as ApiResult<T>; // 错误响应原样返回
+    }
+    return { ok: true, data: raw as T }; // 成功统一包装（与浏览器分支一致）
   }
   // 浏览器直连（开发调试）：本地后端无令牌模式
   const res = await fetch(`http://127.0.0.1:8756${path}`, {

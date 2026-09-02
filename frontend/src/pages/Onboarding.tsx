@@ -21,6 +21,7 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [saving, setSaving] = useState(false);
+  const [errMsg, setErrMsg] = useState('');
 
   const q = QUESTIONS[step];
   const current = (answers[q.key] ?? (q.multi ? [] : '')) as string | string[];
@@ -43,15 +44,24 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
 
   const finish = async () => {
     setSaving(true);
-    const res = await saveProfile({
-      risk_tolerance: String(answers.risk_tolerance ?? '稳健型'),
-      invest_amount: String(answers.invest_amount ?? '10-50万'),
-      markets: (answers.markets as string[]) || ['A股'],
-      holding_period: String(answers.holding_period ?? '数天~数周'),
-      experience: String(answers.experience ?? '有经验'),
-    });
+    setErrMsg('');
+    try {
+      const res = await saveProfile({
+        risk_tolerance: String(answers.risk_tolerance ?? '稳健型'),
+        invest_amount: String(answers.invest_amount ?? '10-50万'),
+        markets: (answers.markets as string[]) || ['A股'],
+        holding_period: String(answers.holding_period ?? '数天~数周'),
+        experience: String(answers.experience ?? '有经验'),
+      });
+      if (res.ok) {
+        onDone();
+        return;
+      }
+      setErrMsg('保存失败：' + (res.error || '未知错误，请稍后重试'));
+    } catch (e) {
+      setErrMsg('保存失败：' + (e instanceof Error ? e.message : String(e)));
+    }
     setSaving(false);
-    if (res.ok) onDone();
   };
 
   return (
@@ -82,6 +92,7 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
             </button>
           ))}
         </div>
+        {errMsg && <p className="text-xs text-danger mb-3">{errMsg}</p>}
         <div className="flex justify-between">
           <Button variant="secondary" onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0 || saving}>上一步</Button>
           {step < QUESTIONS.length - 1 ? (
