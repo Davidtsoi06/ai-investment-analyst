@@ -8,8 +8,10 @@
   ③ 次日机会预判（异动方向/潜在机会/风险预警）
   ④ 次日操作建议清单
 
-定时：A股 15:30 / 港股 16:30 单市场总结；17:30 合并全市场日报（仅交易日）。
-补跑：应用启动时若已过生成时间且当日缺失则自动补生成。
+定时（V1.0.6）：交易日 12:15 午间收盘报告（A股 11:30 / 港股 12:00 上午收盘，两市合并一次）；
+16:15 全天收盘报告（两市收盘合并一次）。盘中可随时手动生成「盘中临时总结」（kind=intraday），
+与收盘报告（lunch/daily）分开存储与展示，互不覆盖。
+补跑：应用启动时若已过生成时刻且当日对应报告缺失则自动补生成。
 """
 
 import json
@@ -33,6 +35,10 @@ DISCLAIMER = '⚠️ 本报告由 AI 自动生成，仅供参考，不构成投�
 
 # 生成中标记（前端轮询/重复触发时防并发重复生成）
 _running: dict[str, bool] = {}
+
+# V1.0.6 报告类型：lunch 午间收盘 / daily 全天收盘 / intraday 盘中临时总结
+REPORT_KINDS = ('lunch', 'daily', 'intraday')
+KIND_CN = {'lunch': '午间收盘报告', 'daily': '全天收盘报告', 'intraday': '盘中临时总结'}
 
 
 def _local_today() -> str:
@@ -147,14 +153,15 @@ def _ai_configured() -> bool:
     return ai_key_configured()
 
 
-def _ai_predict(market: str, trade_date: str, snapshot: dict, review: dict) -> dict | None:
-    """DeepSeek 生成四段式预判 JSON；无 Key/失败返回 None（降级规则引擎）"""
+def _ai_predict(market: str, trade_date: str, snapshot: dict, review: dict,
+                    session: str = 'daily') -> dict | None:
+    """DeepSeek 生成预判 JSON；无 Key/失败返回 None（降级规则引擎）。session 见 build_summary_prompt"""
     if not _ai_configured():
         return None
     try:
         from ..config import settings
         from ..services.llm_client import chat
-        prompt = build_summary_prompt(market, trade_date, snapshot, review)
+        prompt = build_summary_prompt(market, trade_date, snapshot, review, session=session)
         text = chat([{'role': 'user', 'content': prompt}],
                     model=settings.model_chat, temperature=0.3, max_tokens=2500)
         parsed = parse_ai_output(text)
@@ -183,8 +190,11 @@ def _prev_day_sentiment(market: str, today: str) -> dict | None:
     return result or None
 
 
-def _rule_predict(market: str, trade_date: str, snapshot: dict, review: dict) -> dict:
+def _rule_predict(market: str, trade_date: str, snapshot: dict, review: dict,
+                      session: str = 'daily') -> dict:
     """规则引擎保底预判（无 AI Key / AI 失败时使用）"""
+    if session not in ('lunch', 'intraday'):
+        session = 'daily'
     indices = snapshot.get('indices') or []
     breadth = snapshot.get('breadth')
     boards = snapshot.get('boards') or {}
@@ -281,7 +291,30 @@ def _rule_predict(market: str, trade_date: str, snapshot: dict, review: dict) ->
     else:
         overview = '当日行情数据暂不可用，报告基于已有信息生成。'
 
-    return {'overview': overview, 'outlook': outlook, 'suggestions': suggestions}
+    result = {'overview': overview, 'outlook': outlook, 'suggestions': suggestions}
+    if session != 'daily':
+        # 午间/盘中语境：把"次日/明日/收涨/收跌"等收盘措辞本地化
+        rep = {'次日': '接下来', '明日': '接下来', '明日开盘后': '午后开盘后',
+               '收涨': '上涨', '收跌': '下跌', '开盘后': '午后'}
+        for key in ('overview', 'outlook', 'suggestions'):
+            val = result[key]
+            if key == 'suggestions':
+                for s in val:
+                    s['reason'] = _rep_all(s.get('reason', ''), rep)
+                    s['risk'] = _rep_all(s.get('risk', ''), rep)
+                    s['action'] = _rep_all(s.get('action', ''), rep)
+            elif isinstance(val, list):
+                result[key] = [_rep_all(str(x), rep) for x in val]
+            else:
+                result[key] = _rep_all(str(val), rep)
+    return result
+
+
+def _rep_all(text: str, rep: dict) -> str:
+    """按顺序做整词替换（长词优先）"""
+    for k in sorted(rep, key=len, reverse=True):
+        text = text.replace(k, rep[k])
+    return text
 
 
 # ---------------- 四段式报告生成 ----------------
@@ -302,11 +335,21 @@ def _fmt_board_line(b: dict) -> str:
 
 
 def build_report(market: str, trade_date: str, snapshot: dict, review: dict,
-                 prediction: dict, ai_used: bool) -> str:
-    """四段式 Markdown 报告"""
-    market_cn = {'A股': 'A股盘后总结', '港股': '港股盘后总结', '合并': '全市场日报'}[market]
-    title = f'📊 {trade_date} {market_cn}'
-    lines = [title, '']
+                 prediction: dict, ai_used: bool, session: str = 'daily',
+                 title: str | None = None) -> str:
+    """四段式 Markdown 报告。session: daily/lunch/intraday（决定小节措辞与数据窗口说明）"""
+    market_cn = {'A股': 'A股盘后总结', '港股': '港股盘后总结', '合并': '全市场报告'}[market]
+    head = title or f'📊 {trade_date} {market_cn}'
+    lines = [head, '']
+    session_note = {
+        'daily': '数据窗口：全天收盘（A股 15:00 / 港股 16:00 收盘）',
+        'lunch': '数据窗口：上午收盘（A股 11:30 / 港股 12:00 收盘）',
+        'intraday': '数据窗口：今日开盘至现在的实时行情',
+    }.get(session, '')
+
+    if session_note:
+        lines.append(f'*{session_note}*')
+        lines.append('')
 
     # ① 当日市场全景
     lines.append('## 一、当日市场全景')
@@ -362,15 +405,17 @@ def build_report(market: str, trade_date: str, snapshot: dict, review: dict,
         lines.append('- 今日无触发异动事件')
     lines.append('')
 
-    # ③ 次日机会预判
-    lines.append('## 三、次日机会预判')
+    # ③ 走势研判/关注要点
+    sec3 = {'lunch': '三、下午走势研判', 'intraday': '三、后续关注要点'}.get(session, '三、次日机会预判')
+    lines.append(f'## {sec3}')
     lines.append(f'*{prediction.get("overview", "")}*')
     for i, o in enumerate(prediction.get('outlook') or [], 1):
         lines.append(f'{i}. {o}')
     lines.append('')
 
-    # ④ 次日操作建议清单
-    lines.append('## 四、次日操作建议清单')
+    # ④ 操作建议清单
+    sec4 = {'lunch': '四、下午操作建议清单', 'intraday': '四、接下来的操作建议'}.get(session, '四、次日操作建议清单')
+    lines.append(f'## {sec4}')
     for i, s in enumerate(prediction.get('suggestions') or [], 1):
         parts = [s.get('action', '')]
         if s.get('target'):
@@ -436,7 +481,12 @@ def _persist_sentiment(market: str, trade_date: str, snapshot: dict) -> None:
 # ---------------- 存档与查询 ----------------
 
 SUMMARY_COLS = ('id', 'trade_date', 'market', 'report_type', 'title', 'content', 'suggestions',
-                'snapshot_json', 'ai_used', 'generated_at', 'created_at')
+                'snapshot_json', 'ai_used', 'generated_at', 'created_at', 'kind')
+
+
+def _norm_kind(k) -> str:
+    """报告类型归一：旧记录（kind 为 NULL）按 daily（全天收盘）处理"""
+    return str(k or 'daily') if str(k or 'daily') in REPORT_KINDS else 'daily'
 
 
 def _row_to_report(row) -> dict:
@@ -449,19 +499,56 @@ def _row_to_report(row) -> dict:
         r['snapshot'] = None
     r.pop('snapshot_json', None)
     r['ai_used'] = bool(r.get('ai_used'))
+    r['kind'] = _norm_kind(r.get('kind'))
+    # 兼容旧前端：report_type 保持旧语义（市场名/合并日报）
+    if 'report_type' in r and r.get('kind'):
+        r['report_type'] = r.get('report_type') or (r['market'] if r['market'] != COMBINED else '合并日报')
     return r
 
 
-def get_today_summary(market: str) -> dict | None:
-    """当日指定市场报告（A股/港股/合并）；不存在返回 None"""
+def get_today_summary(market: str, kind: str | None = None) -> dict | None:
+    """当日指定市场报告（kind=None 取当日最新任意类型；kind 指定类型时 NULL 旧记录视为 daily）"""
     conn = get_connection()
     try:
-        row = conn.execute(
-            f"SELECT {', '.join(SUMMARY_COLS)} FROM daily_summary "
-            "WHERE trade_date = ? AND market = ? ORDER BY id DESC LIMIT 1",
-            (_local_today(), market),
-        ).fetchone()
+        if kind is None:
+            row = conn.execute(
+                f"SELECT {', '.join(SUMMARY_COLS)} FROM daily_summary "
+                "WHERE trade_date = ? AND market = ? ORDER BY id DESC LIMIT 1",
+                (_local_today(), market),
+            ).fetchone()
+        elif kind == 'daily':
+            row = conn.execute(
+                f"SELECT {', '.join(SUMMARY_COLS)} FROM daily_summary "
+                "WHERE trade_date = ? AND market = ? AND (kind = 'daily' OR kind IS NULL) "
+                "ORDER BY id DESC LIMIT 1",
+                (_local_today(), market),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                f"SELECT {', '.join(SUMMARY_COLS)} FROM daily_summary "
+                "WHERE trade_date = ? AND market = ? AND kind = ? ORDER BY id DESC LIMIT 1",
+                (_local_today(), market, kind),
+            ).fetchone()
         return _row_to_report(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_today_report(kind: str) -> dict | None:
+    """当日指定类型报告（合并两市口径；lunch/daily/intraday）"""
+    return get_today_summary(COMBINED, kind)
+
+
+def list_today_reports() -> list[dict]:
+    """当日全部报告（任意市场/类型，按时间排序），供今日区展示"""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"SELECT {', '.join(SUMMARY_COLS)} FROM daily_summary "
+            "WHERE trade_date = ? ORDER BY id",
+            (_local_today(),),
+        ).fetchall()
+        return [_row_to_report(r) for r in rows]
     finally:
         conn.close()
 
@@ -479,39 +566,49 @@ def list_summaries(limit: int = 30) -> list[dict]:
 
 
 def today_reports(auto_generate: bool = True) -> list[dict]:
-    """今日全部报告（A股/港股/合并日报）。auto_generate=True 时缺失市场自动补生成
-    （仅画像开启 + 交易日；生成失败不影响其余市场返回）。"""
-    from ..services.settings_service import get_all_settings
+    """今日全部报告（任意市场/类型，含 lunch/daily/intraday）。auto_generate=True 时：
+    交易日且已过 12:15 未生成午间报告 → 自动补午间；已过 16:15 未生成全天报告 → 自动补全天。"""
     from ..services.trading_calendar import is_trading_day
 
-    today = _local_today()
-    markets = [m for m in (get_all_settings().get('markets') or []) if m in REPORT_MARKETS]
-    result: list[dict] = []
-    for m in REPORT_MARKETS:
-        r = get_today_summary(m)
-        if r is None and auto_generate and m in markets and is_trading_day(m):
-            try:
-                r = generate_market_summary(m, force=False).get('report')
-            except Exception as e:  # noqa: BLE001
-                logger.warning('today_reports 自动生成 %s 失败: %s', m, str(e)[:100])
-        if r:
-            result.append(r)
-    c = get_today_summary(COMBINED)
-    if c:
-        result.append(c)
-    return result
+    result = list_today_reports()
+    if not auto_generate or not is_trading_day('A股'):
+        return result
+    now = datetime.now()
+    t = now.hour * 60 + now.minute
+    try:
+        def _merged_done(kind: str) -> bool:
+            return any(r.get('kind') == kind and r.get('market') == COMBINED for r in result)
+
+        if t >= 12 * 60 + 15 and not _merged_done('lunch'):
+            gen = generate_period_report('lunch', force=False)
+            if gen.get('ok') and not gen.get('cached'):
+                logger.info('今日区自动补生成：午间收盘报告')
+        if t >= 16 * 60 + 15 and not _merged_done('daily'):
+            gen = generate_period_report('daily', force=False)
+            if gen.get('ok') and not gen.get('cached'):
+                logger.info('今日区自动补生成：全天收盘报告')
+    except Exception as e:  # noqa: BLE001
+        logger.warning('today_reports 自动补报告失败: %s', str(e)[:100])
+    return list_today_reports()
 
 
 def get_latest_report() -> dict | None:
-    """最新报告（优先当日合并日报）"""
+    """最新报告（优先当日「全天收盘报告」，其次当日午间/盘中，最后任意历史最新）"""
     today = _local_today()
     conn = get_connection()
     try:
         row = conn.execute(
             f"SELECT {', '.join(SUMMARY_COLS)} FROM daily_summary "
-            "WHERE trade_date = ? AND market = ? ORDER BY id DESC LIMIT 1",
+            "WHERE trade_date = ? AND market = ? AND (kind = 'daily' OR kind IS NULL) "
+            "ORDER BY id DESC LIMIT 1",
             (today, COMBINED),
         ).fetchone()
+        if row is None:
+            row = conn.execute(
+                f"SELECT {', '.join(SUMMARY_COLS)} FROM daily_summary "
+                "WHERE trade_date = ? AND market = ? ORDER BY id DESC LIMIT 1",
+                (today, COMBINED),
+            ).fetchone()
         if row is None:
             row = conn.execute(
                 f"SELECT {', '.join(SUMMARY_COLS)} FROM daily_summary ORDER BY trade_date DESC, id DESC LIMIT 1"
@@ -522,21 +619,26 @@ def get_latest_report() -> dict | None:
 
 
 def _save_summary(market: str, trade_date: str, title: str, content: str,
-                  suggestions: list[dict], snapshot: dict, ai_used: bool) -> int:
+                  suggestions: list[dict], snapshot: dict, ai_used: bool,
+                  kind: str = 'daily') -> int:
+    """存档报告：kind ∈ lunch/daily/intraday；同(日期,市场,类型)覆盖（盘中总结同样当日覆盖最新一条）"""
     now = utc_now()
     conn = get_connection()
     try:
-        conn.execute("DELETE FROM daily_summary WHERE trade_date = ? AND market = ?", (trade_date, market))
+        conn.execute(
+            "DELETE FROM daily_summary WHERE trade_date = ? AND market = ? AND (kind = ? OR (kind IS NULL AND ? = 'daily'))",
+            (trade_date, market, kind, kind),
+        )
         cur = conn.execute(
             '''INSERT INTO daily_summary
-            (trade_date, market, content, suggestions, report_type, title, snapshot_json, ai_used, generated_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            (trade_date, market, content, suggestions, report_type, title, snapshot_json, ai_used, generated_at, created_at, kind)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
             (trade_date, market, content,
              json.dumps(suggestions, ensure_ascii=False),
-             market if market != COMBINED else '合并日报',
+             kind,
              title,
              json.dumps(snapshot, ensure_ascii=False, default=str),
-             1 if ai_used else 0, now, now),
+             1 if ai_used else 0, now, now, kind),
         )
         conn.commit()
         return cur.lastrowid
@@ -555,7 +657,69 @@ def _notify_summary(market: str, title: str, content: str) -> None:
         logger.warning('盘后总结通知发送失败: %s', str(e)[:100])
 
 
-# ---------------- 主流程：单市场总结 / 合并日报 ----------------
+# ---------------- 主流程：合并两市收盘报告（午间/全天/盘中临时） ----------------
+
+def generate_period_report(kind: str, force: bool = False) -> dict:
+    """合并 A股+港股 生成报告（V1.0.6 主入口）：
+    - lunch   12:15 午间收盘报告（A股 11:30 / 港股 12:00 已收盘）
+    - daily   16:15 全天收盘报告（两市均已收盘）
+    - intraday 盘中随时临时总结（今日开盘至现在的实时数据，手动触发）
+    force=False 且当日同类型已生成时返回缓存（覆盖当日最新一条）。"""
+    if kind not in REPORT_KINDS:
+        return {'ok': False, 'reason': f'kind 参数错误: {kind}（可选 lunch/daily/intraday）'}
+    lock_key = f'{COMBINED}:{kind}'
+    trade_date = _local_today()
+    if _running.get(lock_key):
+        return {'ok': False, 'reason': f'{KIND_CN[kind]}正在生成中，请稍候', 'generating': True,
+                'date': trade_date, 'market': COMBINED, 'kind': kind, 'cached': False,
+                'report': None, 'errors': []}
+    existing = get_today_report(kind)
+    if existing and not force:
+        return {'ok': True, 'date': trade_date, 'market': COMBINED, 'kind': kind, 'cached': True,
+                'report': existing, 'errors': []}
+
+    _running[lock_key] = True
+    try:
+        # 实时采集两市快照（各时段数据窗口由行情源返回当前最新值）
+        snap_a = collect_snapshot('A股')
+        snap_h = collect_snapshot('港股')
+        snapshot = {
+            'market': COMBINED,
+            'indices': (snap_a.get('indices') or []) + (snap_h.get('indices') or []),
+            'breadth': snap_a.get('breadth'),
+            'boards': snap_a.get('boards'),
+            'turnover': ((snap_a.get('turnover') or 0) + (snap_h.get('turnover') or 0)) or None,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+        review = build_review(['A股', '港股'])
+        prediction = _ai_predict(COMBINED, trade_date, snapshot, review, session=kind)
+        ai_used = prediction is not None
+        if prediction is None:
+            prediction = _rule_predict(COMBINED, trade_date, snapshot, review, session=kind)
+        title = _period_title(kind, trade_date)
+        content = build_report(COMBINED, trade_date, snapshot, review, prediction, ai_used,
+                               session=kind, title=title)
+        report_id = _save_summary(COMBINED, trade_date, title, content,
+                                  prediction.get('suggestions') or [], snapshot, ai_used, kind=kind)
+        _notify_summary(COMBINED, title, content)
+        logger.info('%s 生成完成: id=%s ai=%s 指数=%d 板块=%s',
+                    KIND_CN[kind], report_id, ai_used, len(snapshot.get('indices') or []),
+                    'Y' if snapshot.get('boards') else 'N')
+    finally:
+        _running[lock_key] = False
+
+    return {'ok': True, 'date': trade_date, 'market': COMBINED, 'kind': kind, 'cached': False,
+            'report': get_today_report(kind), 'ai_used': ai_used, 'errors': []}
+
+
+def _period_title(kind: str, trade_date: str) -> str:
+    """按类型生成标题（盘中总结标题带生成时刻）"""
+    if kind == 'intraday':
+        return f'📊 {trade_date} 盘中临时总结（截至 {datetime.now().strftime("%H:%M")}）'
+    return f'📊 {trade_date} {KIND_CN[kind]}（A股+港股）'
+
+
+# ---------------- 主流程：单市场总结（兼容旧入口） / 合并日报 ----------------
 
 def generate_market_summary(market: str = 'A股', force: bool = False) -> dict:
     """生成单市场盘后总结（A股/港股）。force=False 且当日已生成时返回缓存。"""
@@ -598,136 +762,56 @@ def generate_market_summary(market: str = 'A股', force: bool = False) -> dict:
 
 
 def generate_combined_report(force: bool = False) -> dict:
-    """17:30 合并全市场日报：复用当日 A股/港股总结 + 全市场预判。"""
-    trade_date = _local_today()
-    if _running.get(COMBINED):
-        return {'ok': False, 'reason': '合并日报正在生成中，请稍候', 'generating': True,
-                'date': trade_date, 'market': COMBINED, 'cached': False,
-                'report': None, 'errors': []}
-    existing = get_today_summary(COMBINED)
-    if existing and not force:
-        return {'ok': True, 'date': trade_date, 'market': COMBINED, 'cached': True,
-                'report': existing, 'errors': []}
-
-    a_report = get_today_summary('A股')
-    h_report = get_today_summary('港股')
-    if not a_report and not h_report:
-        return {'ok': False, 'reason': '今日尚未生成任何单市场总结（A股/港股）', 'date': trade_date,
-                'market': COMBINED, 'cached': False, 'report': None, 'errors': []}
-
-    _running[COMBINED] = True
-    try:
-        return _generate_combined_locked(trade_date, a_report, h_report, force)
-    finally:
-        _running[COMBINED] = False
-
-
-def _generate_combined_locked(trade_date: str, a_report: dict | None, h_report: dict | None,
-                              force: bool = False) -> dict:
-    """合并日报生成主体（调用方已持有 _running 锁）"""
-
-    # 合并快照：优先复用已存档快照，缺失市场现场采集
-    def _snap(market: str, report: dict | None) -> dict:
-        if report and report.get('snapshot'):
-            return report['snapshot']
-        return collect_snapshot(market)
-
-    snap_a = _snap('A股', a_report)
-    snap_h = _snap('港股', h_report)
-    snapshot = {
-        'market': COMBINED,
-        'indices': (snap_a.get('indices') or []) + (snap_h.get('indices') or []),
-        'breadth': snap_a.get('breadth'),
-        'boards': snap_a.get('boards'),
-        'turnover': ((snap_a.get('turnover') or 0) + (snap_h.get('turnover') or 0)) or None,
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-    }
-
-    review = build_review(['A股', '港股'])
-    prediction = _ai_predict(COMBINED, trade_date, snapshot, review)
-    ai_used = prediction is not None
-    if prediction is None:
-        prediction = _rule_predict(COMBINED, trade_date, snapshot, review)
-
-    title = f'📊 {trade_date} 全市场日报'
-    content = build_report(COMBINED, trade_date, snapshot, review, prediction, ai_used)
-    report_id = _save_summary(COMBINED, trade_date, title, content,
-                              prediction.get('suggestions') or [], snapshot, ai_used)
-    _notify_summary(COMBINED, title, content)
-    logger.info('合并全市场日报生成完成: id=%s ai=%s（A股=%s 港股=%s）',
-                report_id, ai_used, bool(a_report), bool(h_report))
-    return {'ok': True, 'date': trade_date, 'market': COMBINED, 'cached': False,
-            'report': get_today_summary(COMBINED), 'ai_used': ai_used, 'errors': []}
+    """合并全市场收盘报告（旧 17:30 日报入口，V1.0.6 起统一走 generate_period_report('daily')）"""
+    return generate_period_report('daily', force=force)
 
 
 # ---------------- 定时与补跑 ----------------
 
 def register_summary_jobs() -> None:
-    """注册盘后总结定时任务：15:30 A股 / 16:30 港股 / 17:30 合并（仅交易日）"""
+    """注册收盘报告定时任务（V1.0.6）：交易日 12:15 午间收盘报告 / 16:15 全天收盘报告（A股+港股一次合并）"""
     from ..services.scheduler import add_cron_job
     from ..services.trading_calendar import is_trading_day
-    from ..services.settings_service import get_all_settings
 
-    def _markets_enabled() -> list[str]:
-        return [m for m in (get_all_settings().get('markets') or []) if m in REPORT_MARKETS]
+    def _mk_job(kind: str) -> None:
+        def job() -> None:
+            if not is_trading_day('A股'):
+                return
+            try:
+                generate_period_report(kind, force=False)
+            except Exception as e:  # noqa: BLE001
+                logger.error('定时 %s 生成失败: %s', KIND_CN[kind], e)
+        add_cron_job(job, hour=12 if kind == 'lunch' else 16,
+                     minute=15, job_id='summary_' + kind)
 
-    def _job_a() -> None:
-        if not is_trading_day('A股') or 'A股' not in _markets_enabled():
-            return
-        try:
-            generate_market_summary('A股', force=False)
-        except Exception as e:  # noqa: BLE001
-            logger.error('定时 A股盘后总结失败: %s', e)
-
-    def _job_hk() -> None:
-        if not is_trading_day('港股') or '港股' not in _markets_enabled():
-            return
-        try:
-            generate_market_summary('港股', force=False)
-        except Exception as e:  # noqa: BLE001
-            logger.error('定时 港股盘后总结失败: %s', e)
-
-    def _job_all() -> None:
-        if not is_trading_day('A股'):
-            return
-        try:
-            generate_combined_report(force=False)
-        except Exception as e:  # noqa: BLE001
-            logger.error('定时 合并日报生成失败: %s', e)
-
-    add_cron_job(_job_a, hour=15, minute=30, job_id='summary_a')
-    add_cron_job(_job_hk, hour=16, minute=30, job_id='summary_hk')
-    add_cron_job(_job_all, hour=17, minute=30, job_id='summary_all')
-    logger.info('盘后总结定时任务已注册（15:30 A股 / 16:30 港股 / 17:30 合并，仅交易日）')
+    _mk_job('lunch')
+    _mk_job('daily')
+    logger.info('收盘报告定时任务已注册（交易日 12:15 午间 / 16:15 全天，A股+港股合并，仅交易日）')
 
 
 def catchup_summaries() -> None:
-    """开机补跑：已过生成时刻且当日报告缺失时自动补生成（需求 2.3.4）"""
+    """开机补跑（V1.0.6）：交易日且已过 12:15/16:15 而当日对应报告缺失时自动补生成"""
     from ..services.trading_calendar import is_trading_day
-    from ..services.settings_service import get_all_settings
     if not is_trading_day('A股'):
         return
     now = datetime.now()
     t = now.hour * 60 + now.minute
-    markets = [m for m in (get_all_settings().get('markets') or []) if m in REPORT_MARKETS]
-    if t >= 15 * 60 + 30 and 'A股' in markets:
+    today_rows = list_today_reports()
+
+    def _done(kind: str) -> bool:
+        return any(r.get('kind') == kind and r.get('market') == COMBINED for r in today_rows)
+
+    if t >= 12 * 60 + 15 and not _done('lunch'):
         try:
-            r = generate_market_summary('A股', force=False)
-            if not r.get('cached'):
-                logger.info('开机补跑：A股盘后总结已生成')
-        except Exception as e:  # noqa: BLE001
-            logger.error('补跑 A股盘后总结失败: %s', e)
-    if t >= 16 * 60 + 30 and '港股' in markets:
-        try:
-            r = generate_market_summary('港股', force=False)
-            if not r.get('cached'):
-                logger.info('开机补跑：港股盘后总结已生成')
-        except Exception as e:  # noqa: BLE001
-            logger.error('补跑 港股盘后总结失败: %s', e)
-    if t >= 17 * 60 + 30:
-        try:
-            r = generate_combined_report(force=False)
+            r = generate_period_report('lunch', force=False)
             if not r.get('cached') and r.get('ok'):
-                logger.info('开机补跑：合并日报已生成')
+                logger.info('开机补跑：午间收盘报告已生成')
         except Exception as e:  # noqa: BLE001
-            logger.error('补跑 合并日报失败: %s', e)
+            logger.error('补跑 午间收盘报告失败: %s', e)
+    if t >= 16 * 60 + 15 and not _done('daily'):
+        try:
+            r = generate_period_report('daily', force=False)
+            if not r.get('cached') and r.get('ok'):
+                logger.info('开机补跑：全天收盘报告已生成')
+        except Exception as e:  # noqa: BLE001
+            logger.error('补跑 全天收盘报告失败: %s', e)

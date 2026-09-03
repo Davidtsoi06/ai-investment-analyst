@@ -297,7 +297,7 @@ export default function Dashboard() {
           {notifyLoading && notifications.length === 0 ? (
             <Loading />
           ) : notifications.length === 0 ? (
-            <EmptyState icon="🔔" title="暂无通知" description="盘前资讯、异动提醒、盘后总结等通知会显示在这里。" className="py-6" />
+            <EmptyState icon="🔔" title="暂无通知" description="盘前资讯、异动提醒、收盘报告、风险预警等通知会显示在这里。" className="py-6" />
           ) : (
             <div className="divide-y divide-border">
               {notifications.map((n) => (

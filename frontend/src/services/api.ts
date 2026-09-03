@@ -312,13 +312,19 @@ export const runTrackingCheck = () => api<TrackingCheckResult>('POST', '/api/tra
 export interface SummaryReport {
   id: number;
   trade_date: string;
-  /** A股 / 港股 / 全市场（合并日报） */
+  /** A股 / 港股 / 合并（两市合并） */
   market: string;
-  /** 四段式 Markdown 文本：市场全景/持仓追踪回顾/次日预判/操作建议清单 */
+  /** V1.0.6 报告类型：lunch 午间收盘 / daily 全天收盘 / intraday 盘中临时总结（旧记录视为 daily） */
+  kind?: string | null;
+  /** 报告标题（含类型与日期，如「📊 2026-09-03 午间收盘报告（A股+港股）」） */
+  title?: string | null;
+  /** 四段式 Markdown 文本：市场全景/持仓追踪回顾/预判/操作建议清单 */
   content: string;
-  /** 次日预判 JSON（字符串形式，可解析为对象） */
+  /** 预判 JSON（字符串形式，可解析为对象） */
   suggestions?: string | null;
+  ai_used?: boolean;
   created_at: string;
+  [k: string]: unknown;
 }
 
 export interface SummaryGenerateResult {
@@ -345,6 +351,10 @@ export const getTodaySummary = () => api<SummaryReport[]>('GET', '/api/summary/t
 export const getSummaryHistory = (limit = 20) =>
   api<SummaryReport[]>('GET', '/api/summary/history?limit=' + limit);
 export const generateDailySummary = () => api<SummaryDailyResult>('POST', '/api/summary/daily');
+/** V1.0.6：生成午间收盘报告（幂等） / 全天收盘报告 / 盘中临时总结 */
+export const generateLunchReport = () => api<SummaryGenerateResult>('POST', '/api/summary/lunch');
+export const generateCloseReport = () => api<SummaryGenerateResult>('POST', '/api/summary/daily');
+export const generateIntradayReport = () => api<SummaryGenerateResult>('POST', '/api/summary/intraday');
 
 // ---- 智能问答与研报解读（S13，契约与后端 /api/chat/*、/api/research/* 对齐） ----
 export interface ChatUsedData {

@@ -771,6 +771,7 @@ from .agents.summary_agent import (  # noqa: E402
     catchup_summaries,
     generate_combined_report as _sum_combined,
     generate_market_summary as _sum_generate,
+    generate_period_report as _sum_period,
     get_latest_report as _sum_latest,
     get_today_summary as _sum_today,
     list_summaries as _sum_history,
@@ -801,6 +802,27 @@ def summary_generate(
             'report': result.get('report'), 'error': None}
 
 
+@app.post("/api/summary/lunch")
+def summary_lunch(x_backend_token: str = Header(default="")):
+    """生成今日午间收盘报告（交易日 12:15 定时；手动调用幂等）"""
+    require_token(x_backend_token)
+    return _sum_period('lunch', force=False)
+
+
+@app.post("/api/summary/daily")
+def summary_daily_report(x_backend_token: str = Header(default="")):
+    """生成今日全天收盘报告（交易日 16:15 定时；手动调用幂等）"""
+    require_token(x_backend_token)
+    return _sum_period('daily', force=False)
+
+
+@app.post("/api/summary/intraday")
+def summary_intraday(x_backend_token: str = Header(default="")):
+    """随时生成盘中临时总结（今日开盘至今；多次生成覆盖当日最新一条）"""
+    require_token(x_backend_token)
+    return _sum_period('intraday', force=False)
+
+
 @app.get("/api/summary/today")
 def summary_today(
     market: str | None = Query(None, description='A股/港股/合并（缺省返回今日全部市场列表）'),
@@ -827,20 +849,6 @@ def summary_run(data: SummaryRunIn, x_backend_token: str = Header(default="")):
     if market == '合并':
         return _sum_combined(force=data.force)
     return _sum_generate(market, force=data.force)
-
-
-@app.post("/api/summary/daily")
-def summary_daily(x_backend_token: str = Header(default="")):
-    """合并生成全市场日报（契约主入口）：当日 A股+港股 报告拼接 + 通知推送。
-    返回 {ok, existing, report, sent, reason?}"""
-    require_token(x_backend_token)
-    result = _sum_combined(force=False)
-    if not result.get('ok'):
-        return {'ok': False, 'existing': False, 'report': None,
-                'sent': False, 'reason': result.get('reason', '合并日报生成失败')}
-    return {'ok': True, 'existing': bool(result.get('cached')),
-            'report': result.get('report'), 'sent': True,
-            'reason': '已推送应用内通知' if not result.get('cached') else '今日已生成（生成时已推送）'}
 
 
 @app.get("/api/summary/history")

@@ -12,7 +12,7 @@ const MARKET_OPTIONS = ['A股', '港股', '美股'];
 const NOTIFY_ITEMS: [string, string][] = [
   ['premarket', '盘前资讯'],
   ['alert', '异动提醒'],
-  ['summary', '盘后总结'],
+  ['summary', '收盘报告'],
   ['recommendation', '推荐推送'],
   ['risk', '风险预警'],
   ['review', '复盘报告'],

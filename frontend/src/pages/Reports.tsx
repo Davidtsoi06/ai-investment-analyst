@@ -1,5 +1,6 @@
-// S12 盘后报告：今日报告（A股/港股 四段式）/ 合并日报 / 历史报告
-// 契约：/api/summary/{today,generate,daily,history}（后端契约见 t1）
+// 收盘报告（V1.0.6 重塑）：交易日 12:15 午间收盘报告 / 16:15 全天收盘报告（A股+港股一次合并）
+// + 盘中临时总结（随时手动生成，独立类型显示，不与收盘报告混淆）
+// 契约：/api/summary/{today,history,lunch,daily,intraday}
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -7,8 +8,9 @@ import Badge from '../components/ui/Badge';
 import Loading from '../components/ui/Loading';
 import EmptyState from '../components/ui/EmptyState';
 import {
-  generateDailySummary,
-  generateSummary,
+  generateCloseReport,
+  generateIntradayReport,
+  generateLunchReport,
   getSummaryHistory,
   getTodaySummary,
   parseApiError,
@@ -26,24 +28,31 @@ function toList<T>(data: unknown): T[] {
   return [];
 }
 
-/** 合并日报市场标识（后端用「全市场」，兼容 合并/日报/汇总 等写法） */
-const DAILY_MARKETS = ['全市场', '合并', '合并日报', '日报', '汇总', 'daily', 'all'];
-
-function isDaily(r: SummaryReport): boolean {
-  const m = (r.market || '').trim();
-  return DAILY_MARKETS.some((k) => m.includes(k) || m.toLowerCase() === k);
+/** 报告类型元信息（V1.0.6 kind；旧记录归一为 daily） */
+function kindMeta(kind: string | null | undefined): { label: string; variant: 'info' | 'success' | 'warning' | 'default' } {
+  const k = (kind || '').toLowerCase();
+  if (k === 'lunch') return { label: '午间收盘', variant: 'info' };
+  if (k === 'intraday') return { label: '盘中临时总结', variant: 'warning' };
+  return { label: '全天收盘', variant: 'success' };
 }
 
-function marketVariant(m: string | undefined | null): 'success' | 'danger' | 'warning' | 'info' | 'default' {
-  const s = (m || '').trim();
-  if (s.includes('港股')) return 'info';
-  if (s.includes('全市场') || s.includes('合并') || s.includes('日报')) return 'warning';
-  return 'default';
+/** UTC ISO → 北京时间 "MM-DD HH:mm"（旧格式无时区则原样截取） */
+function fmtBjt(s: string | null | undefined): string {
+  if (!s) return '';
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) {
+    const bj = new Date(d.getTime() + 8 * 3600 * 1000);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return (
+      p(bj.getUTCMonth() + 1) + '-' + p(bj.getUTCDate()) + ' ' + p(bj.getUTCHours()) + ':' + p(bj.getUTCMinutes())
+    );
+  }
+  return s.slice(0, 16);
 }
 
-/** 四段式 Markdown 分行渲染：标题/分隔线/emoji 行着色，参考 News 页 renderPremarket */
+/** 四段式 Markdown 分行渲染：标题/分隔线/emoji 行着色 */
 function renderSummary(content: string, keyPrefix: string) {
-  return content.split('\n').map((line, i) => {
+  return (content || '').split('\n').map((line, i) => {
     const t = line.trim();
     if (!t) return <div key={keyPrefix + '-e' + i} className="h-1.5" />;
     let cls = 'text-text-secondary';
@@ -61,11 +70,28 @@ function renderSummary(content: string, keyPrefix: string) {
   });
 }
 
-/** 时间显示：created_at "2026-08-31 15:30:05" → "15:30" */
-function fmtTime(s: string | undefined | null): string {
-  if (!s) return '';
-  const m = /(\d{2}):(\d{2})/.exec(s);
-  return m ? m[1] + ':' + m[2] : s.slice(0, 5);
+/** 单份报告内容卡（标题行：类型徽章 + 市场 + 日期 + 北京时间生成时刻 + AI/规则来源） */
+function ReportCard({ r, tone }: { r: SummaryReport; tone?: 'border' | 'highlight' }) {
+  const meta = kindMeta(r.kind);
+  const marketTag = r.market === '合并' ? 'A股+港股' : r.market;
+  const isSingleMarket = r.market !== '合并';
+  return (
+    <div className={'rounded-lg p-3 ' + (tone === 'highlight' ? 'border border-warning/40 bg-warning/5' : 'border border-border')}>
+      <div className="flex flex-wrap items-center gap-2 mb-2">
+        <Badge variant={meta.variant}>{meta.label}</Badge>
+        {marketTag && marketTag !== '—' && (
+          <Badge variant={isSingleMarket ? 'default' : 'info'}>{marketTag}</Badge>
+        )}
+        <span className="text-sm font-medium">{r.trade_date}</span>
+        <span className="text-xs text-text-muted">
+          生成于 {fmtBjt(r.created_at)}
+          {r.ai_used === false && ' · 规则引擎'}
+        </span>
+      </div>
+      {r.title && <div className="text-xs font-medium text-primary-800 mb-1">{r.title.replace(/^📊\s*/g, '')}</div>}
+      {renderSummary(r.content, 'rep-' + r.id)}
+    </div>
+  );
 }
 
 export default function Reports() {
@@ -78,7 +104,7 @@ export default function Reports() {
   const [historyError, setHistoryError] = useState('');
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
-  const [generating, setGenerating] = useState<string | null>(null); // A股 / 港股 / daily
+  const [generating, setGenerating] = useState<string | null>(null); // lunch / daily / intraday
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const todaySeq = useRef(0);
@@ -91,13 +117,13 @@ export default function Reports() {
     if (seq !== todaySeq.current) return;
     setTodayLoading(false);
     if (r.ok) setToday(toList<SummaryReport>(r.data));
-    else setTodayError('今日报告获取失败：' + parseApiError(r.error));
+    else setTodayError('报告获取失败：' + parseApiError(r.error));
   }, []);
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     setHistoryError('');
-    const r = await getSummaryHistory(20);
+    const r = await getSummaryHistory(30);
     setHistoryLoading(false);
     if (r.ok) setHistory(toList<SummaryReport>(r.data));
     else setHistoryError('历史报告获取失败：' + parseApiError(r.error));
@@ -108,7 +134,7 @@ export default function Reports() {
     loadHistory();
   }, [loadToday, loadHistory]);
 
-  // 30 秒轻量轮询（收盘后自动生成时页面自动更新；后台标签页暂停）
+  // 30 秒轻量轮询（定时报告生成后页面自动更新；后台标签页暂停）
   useEffect(() => {
     const t = window.setInterval(() => {
       if (document.hidden) return;
@@ -122,116 +148,124 @@ export default function Reports() {
     window.setTimeout(() => setMsg(null), 6000);
   };
 
-  const handleGenerate = async (market: string) => {
-    setGenerating(market);
+  const handleGen = async (kind: 'lunch' | 'daily' | 'intraday') => {
+    setGenerating(kind);
     setMsg(null);
-    const r = await generateSummary(market);
+    const fn = kind === 'lunch' ? generateLunchReport : kind === 'daily' ? generateCloseReport : generateIntradayReport;
+    const r = await fn();
     setGenerating(null);
     if (!r.ok) {
       flash('生成失败：' + parseApiError(r.error), 'err');
       return;
     }
-    const d = r.data as { existing?: boolean; report?: SummaryReport } | undefined;
-    if (d?.existing) {
-      flash(market + ' 今日报告已生成（不重复生成），已刷新列表');
+    const d = r.data as { cached?: boolean; ok?: boolean; reason?: string } | undefined;
+    if (d?.cached) {
+      flash('今日该报告已生成（不重复生成），已刷新列表');
+    } else if (d?.ok === false) {
+      flash('生成失败：' + (d.reason || '未知原因'), 'err');
     } else {
-      flash(market + ' 总结生成完成');
+      flash('已生成，稍候自动刷新');
     }
     await Promise.all([loadToday(), loadHistory()]);
   };
 
-  const handleDaily = async () => {
-    setGenerating('daily');
-    setMsg(null);
-    const r = await generateDailySummary();
-    setGenerating(null);
-    if (!r.ok) {
-      flash('合并日报生成失败：' + parseApiError(r.error), 'err');
-      return;
-    }
-    const d = r.data as { existing?: boolean; sent?: boolean; reason?: string } | undefined;
-    if (d?.existing) {
-      flash('今日合并日报已生成（不重复生成）' + (d.sent ? '，已推送通知' : ''));
-    } else {
-      flash('合并日报生成完成' + (d?.sent ? '，已推送通知' : d?.reason ? '（' + d.reason + '）' : ''));
-    }
-    await Promise.all([loadToday(), loadHistory()]);
-  };
+  // 今日分组：合并两市（lunch/daily/intraday）+ 旧版单市场记录
+  const byKind = useMemo(() => {
+    const merged = today.filter((r) => r.market === '合并');
+    const legacy = today.filter((r) => r.market !== '合并');
+    const lunch = merged.find((r) => (r.kind || 'daily').toLowerCase() === 'lunch') || null;
+    const daily = merged.find((r) => (r.kind || 'daily').toLowerCase() === 'daily') || null;
+    const intraday = merged.filter((r) => (r.kind || '').toLowerCase() === 'intraday');
+    return { lunch, daily, intraday, legacy };
+  }, [today]);
 
-  const todayDaily = useMemo(() => today.filter(isDaily), [today]);
-  const todayMarkets = useMemo(() => today.filter((r) => !isDaily(r)), [today]);
+  const todayNonEmpty = byKind.lunch || byKind.daily || byKind.intraday.length > 0 || byKind.legacy.length > 0;
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-primary-900">盘后报告</h1>
-          <p className="text-xs text-text-muted mt-1">收盘后自动生成 · 15:30 A股 / 16:30 港股总结 · 17:30 合并日报 · 四段式：市场全景 / 持仓追踪回顾 / 次日预判 / 操作建议</p>
+          <h1 className="text-xl font-bold text-primary-900">收盘报告</h1>
+          <p className="text-xs text-text-muted mt-1">
+            交易日 12:15 自动生成午间收盘报告 · 16:15 自动生成全天收盘报告（每次均含 A股+港股）· 盘中可随时生成「盘中临时总结」，两者分开显示
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" size="sm" onClick={() => { loadToday(); loadHistory(); }} disabled={todayLoading && historyLoading}>
             刷新
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => handleGenerate('A股')} disabled={generating !== null}>
-            {generating === 'A股' ? '生成中...' : '生成 A股 总结'}
+          <Button size="sm" onClick={() => handleGen('intraday')} disabled={generating !== null}>
+            {generating === 'intraday' ? '生成中（约 10~30 秒）...' : '📝 生成盘中总结'}
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => handleGenerate('港股')} disabled={generating !== null}>
-            {generating === '港股' ? '生成中...' : '生成港股总结'}
+          <Button variant="secondary" size="sm" onClick={() => handleGen('lunch')} disabled={generating !== null}>
+            {generating === 'lunch' ? '生成中...' : '生成午间报告'}
           </Button>
-          <Button size="sm" onClick={handleDaily} disabled={generating !== null}>
-            {generating === 'daily' ? '合并中...' : '合并日报'}
+          <Button variant="secondary" size="sm" onClick={() => handleGen('daily')} disabled={generating !== null}>
+            {generating === 'daily' ? '生成中...' : '生成全天报告'}
           </Button>
         </div>
       </div>
       {msg && <p className={'text-sm ' + (msg.type === 'ok' ? 'text-success' : 'text-danger')}>{msg.text}</p>}
 
-      {/* 今日报告：合并日报 + 各市场分区 */}
+      {/* 今日报告：午间收盘 / 全天收盘 / 盘中临时总结 分区显示 */}
       <Card>
         <div className="flex flex-wrap items-center gap-2 mb-3">
           <h2 className="font-bold text-sm">今日报告</h2>
-          {today.length > 0 && <span className="text-xs text-text-muted">{today[0].trade_date}</span>}
-          <span className="text-xs text-text-muted ml-auto">30 秒自动刷新 · 生成会拉取实时行情，约 10~30 秒</span>
+          {today[0]?.trade_date && <span className="text-xs text-text-muted">{today[0].trade_date}</span>}
+          <span className="text-xs text-text-muted ml-auto">30 秒自动刷新 · 生成需拉取两市实时行情，约 10~30 秒</span>
         </div>
         {todayError && <p className="text-sm text-danger mb-2">{todayError}</p>}
-        {todayLoading && today.length === 0 ? (
+        {todayLoading && !todayNonEmpty ? (
           <Loading />
-        ) : today.length === 0 ? (
+        ) : !todayNonEmpty ? (
           <EmptyState
             icon="📋"
             title="今日暂无报告"
-            description="收盘后自动生成（A股 15:30 / 港股 16:30 / 合并日报 17:30），也可点击右上角「生成 A股 总结」「生成港股总结」手动生成。"
+            description="交易日 12:15 将自动生成「午间收盘报告」、16:15 自动生成「全天收盘报告」；现在也可点击右上角「生成盘中总结」获取一份截至目前的行情总结。"
           />
         ) : (
-          <div className="space-y-4">
-            {todayDaily.map((r) => (
-              <div key={r.id} className="border border-warning/40 rounded-lg p-3 bg-warning/5">
-                <div className="flex flex-wrap items-center gap-2 mb-2">
-                  <Badge variant="warning">合并日报</Badge>
-                  <span className="text-sm font-medium">{r.trade_date}</span>
-                  <span className="text-xs text-text-muted">生成于 {fmtTime(r.created_at)}</span>
-                </div>
-                {renderSummary(r.content, 'daily-' + r.id)}
+          <div className="space-y-3">
+            {byKind.lunch && (
+              <div>
+                <div className="text-xs font-bold text-primary-700 mb-1.5">🌤 午间收盘报告（12:15）</div>
+                <ReportCard r={byKind.lunch} />
               </div>
-            ))}
-            {todayMarkets.map((r) => (
-              <div key={r.id} className="border border-border rounded-lg p-3">
-                <div className="flex flex-wrap items-center gap-2 mb-2">
-                  <Badge variant={marketVariant(r.market)}>{r.market || '—'}</Badge>
-                  <span className="text-sm font-medium">{r.trade_date}</span>
-                  <span className="text-xs text-text-muted">生成于 {fmtTime(r.created_at)}</span>
-                </div>
-                {renderSummary(r.content, 'mkt-' + r.id)}
+            )}
+            {byKind.daily && (
+              <div>
+                <div className="text-xs font-bold text-primary-700 mb-1.5">🌆 全天收盘报告（16:15）</div>
+                <ReportCard r={byKind.daily} tone="highlight" />
               </div>
-            ))}
+            )}
+            {byKind.intraday.length > 0 && (
+              <div>
+                <div className="text-xs font-bold text-warning mb-1.5">⏱ 盘中临时总结（随时生成 · 独立于收盘报告）</div>
+                {byKind.intraday.map((r) => (
+                  <div key={r.id} className="mb-2 last:mb-0">
+                    <ReportCard r={r} />
+                  </div>
+                ))}
+              </div>
+            )}
+            {byKind.legacy.length > 0 && (
+              <div>
+                <div className="text-xs font-bold text-text-secondary mb-1.5">旧版单市场报告（兼容显示）</div>
+                {byKind.legacy.map((r) => (
+                  <div key={r.id} className="mb-2 last:mb-0">
+                    <ReportCard r={r} />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </Card>
 
-      {/* 历史报告 */}
+      {/* 历史报告：按类型分徽章展示 */}
       <Card>
         <div className="flex flex-wrap items-center gap-2 mb-3">
           <h2 className="font-bold text-sm">历史报告</h2>
-          <span className="text-xs text-text-muted">最近 20 份 · 点击展开查看内容</span>
+          <span className="text-xs text-text-muted">最近 30 份 · 点击展开查看内容</span>
           <div className="ml-auto">
             <Button variant="secondary" size="sm" onClick={loadHistory} disabled={historyLoading}>
               {historyLoading ? '刷新中...' : '刷新'}
@@ -242,11 +276,12 @@ export default function Reports() {
         {historyLoading && history.length === 0 ? (
           <Loading />
         ) : history.length === 0 ? (
-          <EmptyState icon="🗂️" title="暂无历史报告" description="生成的报告会自动存档在这里，点击条目展开查看。" />
+          <EmptyState icon="🗂️" title="暂无历史报告" description="收盘报告与盘中总结都会自动存档在这里（类型徽章区分），点击条目展开查看。" />
         ) : (
           <div className="divide-y divide-border">
             {history.map((h) => {
               const open = expandedId === h.id;
+              const meta = kindMeta(h.kind);
               return (
                 <div key={h.id}>
                   <button
@@ -255,8 +290,9 @@ export default function Reports() {
                     className="w-full flex flex-wrap items-center gap-x-4 gap-y-1 py-2.5 text-left hover:bg-primary-50/60 rounded px-2"
                   >
                     <span className="text-xs text-text-muted font-number w-24">{h.trade_date}</span>
-                    <Badge variant={marketVariant(h.market)}>{isDaily(h) ? '合并日报' : h.market || '—'}</Badge>
-                    <span className="text-xs text-text-muted font-number">{fmtTime(h.created_at)}</span>
+                    <Badge variant={meta.variant}>{meta.label}</Badge>
+                    {h.market && h.market !== '合并' && <Badge variant="default">{h.market}</Badge>}
+                    <span className="text-xs text-text-muted font-number">{fmtBjt(h.created_at)}</span>
                     <span className="text-xs text-text-secondary ml-auto">{open ? '收起 ▲' : '展开 ▼'}</span>
                   </button>
                   {open && (

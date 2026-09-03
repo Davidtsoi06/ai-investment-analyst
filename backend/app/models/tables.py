@@ -4,7 +4,7 @@
 SCHEMA_VERSION 递增并同步补充 MIGRATIONS：旧库通过 ALTER 增列/建索引平滑升级。
 """
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 
 TABLES_DDL = [
     # 1. 用户画像（引导问卷结果，可随时修改）
@@ -232,6 +232,17 @@ TABLES_DDL = [
 
 # 版本化迁移：{版本: 步骤列表}。步骤必须幂等（增列前先查列存在性，建索引用 IF NOT EXISTS）。
 MIGRATIONS: dict[int, list[dict]] = {
+    9: [
+        # V1.0.6 报告类型化：唯一约束从 (trade_date, market) 升级为 (trade_date, market, kind)，
+        # 允许同日并存 午间/全天/盘中 多份报告
+        {'kind': 'sql', 'ddl': "DROP INDEX IF EXISTS idx_daily_summary_date_market"},
+        {'kind': 'sql', 'ddl': "CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_summary_date_market_kind ON daily_summary(trade_date, market, kind)"},
+    ],
+    8: [
+        # V1.0.6 盘后报告重塑：报告类型 kind（lunch 午间收盘 / daily 全天收盘 / intraday 盘中临时总结）；
+        # 旧记录 kind 为 NULL，查询时按 daily 处理
+        {'kind': 'add_column', 'table': 'daily_summary', 'column': 'kind', 'ddl': "ALTER TABLE daily_summary ADD COLUMN kind TEXT"},
+    ],
     7: [
         # S15 契约对齐：复盘报告结构化统计（stats_json/behaviors_json）+ 虚拟账本流水关联推荐
         {'kind': 'add_column', 'table': 'review_reports', 'column': 'stats_json', 'ddl': "ALTER TABLE review_reports ADD COLUMN stats_json TEXT"},

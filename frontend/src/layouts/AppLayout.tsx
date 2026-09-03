@@ -8,7 +8,7 @@ const navItems = [
   { path: '/recommendation', label: '推荐中心', icon: '🎯' },
   { path: '/tracking', label: '追踪管理', icon: '📡' },
   { path: '/watchlist', label: '自选股看板', icon: '⭐' },
-  { path: '/reports', label: '盘后报告', icon: '📋' },
+  { path: '/reports', label: '收盘报告', icon: '📋' },
   { path: '/risk', label: '风险分析', icon: '🛡️' },
   { path: '/review', label: '投资复盘', icon: '🔄' },
   { path: '/chat', label: '智能问答', icon: '💬' },
