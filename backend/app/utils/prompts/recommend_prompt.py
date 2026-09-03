@@ -12,7 +12,7 @@ SHORT_PROMPT = """你是资深 A 股/港股短线交易分析师。基于以下�
 - 只输出你认为值得关注的标的；没有把握就少输出
 
 输出格式：严格 JSON 数组，不要任何其他文字，例如：
-[{"symbol":"600519","entry_min":1280.0,"entry_max":1310.0,"stop_loss":1240.0,"target":1400.0,"confidence":72,"logic":"放量突破20日高点，MACD金叉，短线动量强","risk_level":"中"}]
+{{"symbol": "600519", "entry_min": 1280.0, "entry_max": 1310.0, "stop_loss": 1240.0, "target": 1400.0, "confidence": 72, "logic": "放量突破20日高点，MACD金叉，短线动量强", "risk_level": "中"}}
 
 字段说明：
 - entry_min/entry_max：入场区间（元）；stop_loss：止损价；target：目标价
@@ -32,7 +32,7 @@ LONG_PROMPT = """你是资深 A 股/港股价值投资分析师。基于以下�
 - 只输出你认为值得长线持有的标的
 
 输出格式：严格 JSON 数组，不要任何其他文字，例如：
-[{"symbol":"600519","valuation_min":1200.0,"valuation_max":1500.0,"confidence":75,"logic":"高端白酒龙头，PE 19 估值合理，月线趋势向上，现金流优秀","risk_level":"低"}]
+{{"symbol": "600519", "valuation_min": 1200.0, "valuation_max": 1500.0, "confidence": 75, "logic": "高端白酒龙头，PE 19 估值合理，月线趋势向上，现金流优秀", "risk_level": "低"}}
 
 字段说明：
 - valuation_min/valuation_max：合理估值区间（元）；confidence：置信度 0~100 整数

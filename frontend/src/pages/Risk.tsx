@@ -83,11 +83,35 @@ function fmtTime(s: string | null | undefined): string {
 
 // ---------------- 宏观信号 ----------------
 
-const SIGNAL_META: Record<MacroSignalLevel, { label: string; emoji: string; desc: string; cls: string }> = {
-  green: { label: '环境友好', emoji: '🟢', desc: '宏观环境友好，可正常操作', cls: 'bg-success/10 border-success/60 text-success' },
-  yellow: { label: '中性偏谨慎', emoji: '🟡', desc: '宏观环境偏谨慎，控制仓位', cls: 'bg-warning/15 border-warning/70 text-warning' },
-  red: { label: '风险偏高', emoji: '🔴', desc: '暂停短线操作，注意风险', cls: 'bg-danger/10 border-danger/70 text-danger' },
-  black: { label: '系统性风险', emoji: '⚫', desc: '暂停买入，规避系统性风险', cls: 'bg-neutral-900 border-neutral-900 text-white' },
+interface SignalMeta {
+  label: string;
+  emoji: string;
+  desc: string;
+  advice: string;
+  cls: string;
+}
+
+const SIGNAL_META: Record<MacroSignalLevel, SignalMeta> = {
+  green: {
+    label: '环境友好', emoji: '🟢', desc: '宏观环境友好，可正常操作',
+    advice: '市场环境支持正常操作：可维持计划仓位与节奏，逢回调分批布局优质标的；同时保留一定现金应对突发波动，别满仓追高。',
+    cls: 'bg-success/10 border-success/60 text-success',
+  },
+  yellow: {
+    label: '中性偏谨慎', emoji: '🟡', desc: '宏观环境偏谨慎，控制仓位',
+    advice: '建议整体仓位控制在五到七成：暂停追高买入，优先持有盈利仓并设好止盈；新开仓只用小仓位试探，等待环境转好信号。',
+    cls: 'bg-warning/15 border-warning/70 text-warning',
+  },
+  red: {
+    label: '风险偏高', emoji: '🔴', desc: '暂停短线操作，注意风险',
+    advice: '风险信号已亮起：请暂停短线与追涨操作，已有短线仓位逢反弹减仓；长线仓位可持有但收紧止损，把回撤控制在自己能承受的范围。',
+    cls: 'bg-danger/10 border-danger/70 text-danger',
+  },
+  black: {
+    label: '系统性风险', emoji: '⚫', desc: '暂停买入，规避系统性风险',
+    advice: '系统性风险信号：建议空仓或仅保留极低仓位观望，不做任何买入；如必须持有，请做好组合大幅回撤的心理与资金准备，等信号转绿再操作。',
+    cls: 'bg-neutral-900 border-neutral-900 text-white',
+  },
 };
 
 /** 兼容后端 level='green|yellow|red|black' 与 signal='🟢|🟡|🔴|⚫' 两种形态 */
@@ -368,6 +392,12 @@ export default function Risk() {
     return arr.sort((a, b) => b.share - a.share);
   }, [ind]);
 
+  // 白话操作建议（后端规则生成，V1.0.6）
+  const ovAdvice = useMemo<string[]>(() => {
+    const a = (overview as { advice?: unknown } | null)?.advice;
+    return Array.isArray(a) ? (a as string[]) : [];
+  }, [overview]);
+
   // ---- 宏观派生数据 ----
   const signal = resolveMacroLevel(macro);
   const signalMeta = SIGNAL_META[signal];
@@ -518,6 +548,24 @@ export default function Risk() {
                 </ul>
               </div>
             )}
+
+            {/* 给你的操作建议（新手友好白话指引） */}
+            {ovAdvice.length > 0 && (
+              <div className="mt-4 rounded-lg border border-primary-200 bg-primary-50/70 px-4 py-3">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-sm font-bold text-primary-800">💡 给你的操作建议</span>
+                  <span className="text-xs text-text-muted">根据上方指标自动生成（不构成投资建议）</span>
+                </div>
+                <ul className="space-y-1.5">
+                  {ovAdvice.map((a, i) => (
+                    <li key={i} className="text-xs leading-5 text-text-secondary flex gap-1.5">
+                      <span className="text-primary-500 shrink-0">•</span>
+                      <span className="whitespace-pre-wrap">{a}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </>
         )}
       </Card>
@@ -585,6 +633,7 @@ export default function Risk() {
                 <div>
                   <div className="font-bold text-base">{signalMeta.label}</div>
                   <div className="text-xs opacity-80">{signalMeta.desc}</div>
+                  <div className="mt-1.5 text-xs leading-5 opacity-90">💡 {signalMeta.advice}</div>
                 </div>
               </div>
               {factors.length > 0 && (

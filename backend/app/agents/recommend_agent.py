@@ -180,8 +180,15 @@ def _call_ai(prompt: str) -> list[dict] | None:
     from ..config import settings
     text = chat([{'role': 'user', 'content': prompt}],
                 model=settings.model_reasoner, temperature=0.3, max_tokens=3000)
-    fence = chr(96) * 3  # 移除可能的 markdown 代码围栏
-    text = re.sub(rf'^s*{fence}jsons*|{fence}s*$', '', text.strip())
+    fence = chr(96) * 3  # 移除可能的 markdown 代码围栏（围栏前后允许任意空白）
+    text = re.sub(rf'^\s*{fence}json\s*', '', text.strip())
+    text = re.sub(rf'{fence}\s*$', '', text)
+    # 模型输出若带解释前缀，提取首个 [ 或 { 起的内容（容错）
+    text = text.strip()
+    if not text.startswith(('[', '{')):
+        idxs = [i for i in (text.find('['), text.find('{')) if i >= 0]
+        if idxs:
+            text = text[min(idxs):]
     data = json.loads(text)
     return data if isinstance(data, list) else None
 

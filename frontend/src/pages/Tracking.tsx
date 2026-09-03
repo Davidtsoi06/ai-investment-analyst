@@ -270,7 +270,7 @@ export default function Tracking() {
             <option value="港股">港股</option>
           </select>
           <div className={'flex items-center gap-1 ' + inputCls + ' w-40'}>
-            <span className="text-xs text-text-secondary whitespace-nowrap">价格</span>
+            <span className="text-xs text-text-secondary whitespace-nowrap">涨跌超</span>
             <input
               type="number"
               min={1}
@@ -321,7 +321,7 @@ export default function Tracking() {
           </Button>
         </div>
         <p className="text-xs text-text-muted mt-2">
-          已追踪 {items.length} / {MAX_TRACKING} 只{full ? '（已达上限，请先删除或暂停）' : '（异动同股同类 15 分钟不重复通知；突破均线随技术信号检测）'}
+          已追踪 {items.length} / {MAX_TRACKING} 只{full ? '（已达上限，请先删除或暂停）' : '（涨跌幅=当日相对昨收，涨/跌超阈值即提醒，每交易日每股一次；放量/大单等其它异动 15 分钟不重复通知）'}
         </p>
       </Card>
 
@@ -352,7 +352,7 @@ export default function Tracking() {
                     </span>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
-                    <Badge variant="warning">价格 ±{item.price_change_pct ?? 3}%</Badge>
+                    <span title="当日相对昨收涨跌幅超过该值即提醒（每交易日一次）"><Badge variant="warning">当日涨跌超 ±{item.price_change_pct ?? 3}%</Badge></span>
                     <Badge variant="warning">放量 {item.volume_ratio ?? 3} 倍</Badge>
                     <Badge variant="warning">大单 {fmtWan(item.big_order_amount ?? 1000000)}</Badge>
                     <OnBadge on={(item.tech_signals ?? 1) === 1} label="技术信号" />

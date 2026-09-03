@@ -322,15 +322,100 @@ def compute_risk_overview(notify: bool = True) -> dict:
         except Exception as e:  # noqa: BLE001
             logger.warning('风险预警通知发送失败: %s', str(e)[:100])
 
+    # V1.0.6：新手友好的白话操作建议（规则文本，无 AI 依赖、即时稳定）
+    advice = _build_advice(indicators, affordable, concentration_detail, positions, total_value)
+
     return {
         'total_value': total_value,
         'indicators': indicators,
         'alerts': alerts,
+        'advice': advice,
         'positions': [{'symbol': p['symbol'], 'name': p['name'], 'market': p['market'],
                        'price': p['price'], 'quantity': p['quantity'],
                        'value': p['value'], 'weight': p['weight']} for p in positions],
         'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
+
+
+def _build_advice(indicators: dict, affordable: float | None,
+                  concentration_detail: list[dict], positions: list[dict],
+                  total_value: float) -> list[str]:
+    """根据风险指标生成可执行操作建议（大白话，供新手理解如何规避风险）"""
+    advice: list[str] = []
+    if not positions or total_value <= 0:
+        return ['当前没有可分析的有效持仓：请先在「持仓总览」录入或同步持仓，再查看组合风险与建议。']
+
+    def pct_of(v) -> float:
+        return round(float(v or 0) * 100, 1)
+
+    top_name = ''
+    for c in concentration_detail:
+        if c.get('name') or c.get('symbol'):
+            top_name = c['name'] or c['symbol']
+            break
+
+    cmax = float(indicators.get('concentration_max') or 0)
+    if cmax > 0.20:
+        advice.append(
+            f'单只集中度过高：「{top_name or "最大持仓"}」占组合 {pct_of(cmax)}%，超过 20% 警戒线。'
+            '建议逐步把仓位分散到 2~3 只相关性较低的标的（如不同行业/市场），单只控制在 20% 以内，'
+            '避免一只股票大跌拖垮整个组合。')
+
+    ms = indicators.get('market_share') or {}
+    top_market, top_share = '', 0.0
+    if isinstance(ms, dict):
+        for mk, v in ms.items():
+            s = float(v or 0)
+            if s > top_share:
+                top_market, top_share = mk, s
+    if top_share > 0.40:
+        advice.append(
+            f'市场占比偏高：{top_market or ""}资产占组合 {pct_of(top_share)}%，超过 40% 警戒线。'
+            f'建议增配另一市场的标的或现金类资产做跨市场分散，单一市场系统性下跌时损失会更可控。')
+
+    mdd = float(indicators.get('max_drawdown') or 0)
+    if mdd >= 0.15:
+        advice.append(
+            f'最大回撤达 {pct_of(mdd)}%（近 60 个交易日从高点回落幅度较大）。'
+            '建议：降低总仓位到心理可承受水平；每笔设置止损纪律（如 -8% 无条件离场），'
+            '不要在市场急跌时情绪化补仓。')
+    elif mdd >= 0.08:
+        advice.append(
+            f'组合最大回撤约 {pct_of(mdd)}%，波动中等。建议保持止损纪律，回撤扩大时先减仓再观察。')
+
+    beta = indicators.get('beta')
+    if beta is not None and float(beta) > 1.5:
+        advice.append(
+            f'Beta {float(beta):.2f}：组合波动显著大于大盘（涨跌都会被放大）。'
+            '建议降低仓位或增配低波动资产（红利/债券类），防止大盘回调时组合跌幅过大。')
+
+    sharpe = indicators.get('sharpe')
+    if sharpe is not None and float(sharpe) < 0:
+        advice.append(
+            '夏普比率为负：组合收益跑不赢无风险利率，说明持仓质量或入场时机欠佳。'
+            '建议审视每只持仓的上涨逻辑是否还在，把资金逐步换入趋势向上、基本面更扎实的标的。')
+
+    var_amt = indicators.get('var')
+    if var_amt is not None and float(var_amt) > 0:
+        if affordable is not None and float(var_amt) > affordable:
+            advice.append(
+                f'单日 VaR（{fmt_money_str(float(var_amt))}）已超过你的可承受额度'
+                f'（约 {fmt_money_str(affordable)}）。建议直接降低仓位/减少杠杆，把潜在单日亏损压回可承受范围。')
+
+    if not advice:
+        advice.append(
+            '各项指标均在健康范围内：集中度、回撤、波动与潜在损失都可控。'
+            '建议维持现有纪律：按计划定投/分批、设好止损、定期复盘，不要频繁追涨杀跌。')
+    return advice[:5]
+
+
+def fmt_money_str(v: float) -> str:
+    """金额简写：≥1亿 → x.x 亿；≥1万 → x.x 万；否则元"""
+    if v >= 1e8:
+        return f'{v / 1e8:.1f} 亿元'
+    if v >= 1e4:
+        return f'{v / 1e4:.1f} 万元'
+    return f'{v:.0f} 元'
 
 
 # ---------------- 压力测试 ----------------

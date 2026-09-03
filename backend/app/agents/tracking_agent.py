@@ -15,7 +15,7 @@
 """
 
 import time
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timezone, timedelta
 
 from ..data_sources.market.data_fusion import data_fusion
 from ..models.database import get_connection, utc_now
@@ -101,19 +101,7 @@ EVENT_TYPE_CN = {
     'ma_break': '突破均线',
 }
 
-PRICE_WINDOW_SECONDS = 300  # 5 分钟窗口
-COOLDOWN_SECONDS = 15 * 60  # 同股同类 15 分钟不重复
-MIN_INTERVAL_SECONDS = 30.0  # 折算间隔下限（防止过快轮询放大噪声）
-
-
-def _scale_pct(pct: float, dt: float) -> float:
-    """实际间隔涨跌幅 → 5 分钟窗口折算涨跌幅（按时间线性比例）"""
-    if dt <= 0:
-        return pct
-    window = max(dt, MIN_INTERVAL_SECONDS)
-    if window >= PRICE_WINDOW_SECONDS:
-        return pct
-    return pct * (PRICE_WINDOW_SECONDS / window)
+COOLDOWN_SECONDS = 15 * 60  # 同股同类（非涨跌幅类）15 分钟不重复
 
 
 def _volume_check(track: dict, quote, kline) -> dict | None:
@@ -215,32 +203,27 @@ def check_tracking(track: dict, prev: dict | None, quote=None, kline=None) -> li
         kline = data_fusion.get_kline(track['symbol'], track['market'], 120)
 
     events: list[dict] = []
-    now = datetime.now()
     price = float(quote.price)
     change_pct = float(quote.change_pct or 0.0)
     threshold = float(track['price_change_pct'])
 
-    # ① 价格急涨急跌
-    if prev is not None and prev.get('price') and prev['price'] > 0:
-        dt = now.timestamp() - float(prev['ts'])
-        actual = (price / float(prev['price']) - 1.0) * 100.0
-        pct5 = _scale_pct(actual, dt)
-        if abs(pct5) >= threshold:
-            if pct5 > 0:
-                etype = 'price_surge'
-                label = '急涨'
-            else:
-                etype = 'price_drop'
-                label = '急跌'
-            urgent = abs(pct5) >= 2 * threshold or pct5 <= -5.0
-            events.append({
-                'event_type': etype,
-                'level': '紧急' if urgent else '关注',
-                'price': price,
-                'change_pct': round(pct5, 2),
-                'detail': (f'5分钟窗口折算{label} {pct5:+.2f}%（实际 {actual:+.2f}% / {dt:.0f} 秒）'
-                           f'，当日 {change_pct:+.2f}%'),
-            })
+    # ① 当日涨跌幅超阈值（相对昨收；上涨/下跌都触发，交易时段内由轮询检查）
+    if threshold > 0 and abs(change_pct) >= threshold:
+        if change_pct > 0:
+            etype = 'price_surge'
+            label = '上涨'
+        else:
+            etype = 'price_drop'
+            label = '下跌'
+        urgent = abs(change_pct) >= 2 * threshold
+        events.append({
+            'event_type': etype,
+            'level': '紧急' if urgent else '关注',
+            'price': price,
+            'change_pct': round(change_pct, 2),
+            'detail': (f'当日{label} {change_pct:+.2f}%（相对昨收），'
+                       f'超过提醒阈值 ±{threshold:.1f}%'),
+        })
 
     # ② 成交量放大
     ev = _volume_check(track, quote, kline)
@@ -304,17 +287,42 @@ def _ai_comment(track: dict, event: dict) -> str:
         return '价格波动超过阈值，请关注。'
 
 
+def _day_event_done(tracking_id: int, event_type: str) -> bool:
+    """当日（本地 0 点起，存储为 UTC）是否已触发过该股该类型事件（涨跌幅提醒每交易日一次）"""
+    try:
+        local_midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        utc_start = (local_midnight - timedelta(hours=8)).strftime('%Y-%m-%dT%H:%M:%S')
+    except Exception:  # noqa: BLE001
+        return False
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM tracking_events "
+            "WHERE tracking_id = ? AND event_type = ? AND substr(created_at, 1, 19) >= ?",
+            (tracking_id, event_type, utc_start),
+        ).fetchone()
+        return int(row['n'] or 0) > 0
+    finally:
+        conn.close()
+
+
 def persist_event(track: dict, event: dict) -> dict | None:
-    """事件入库 + 今日触发计数 + 分级通知（同股同类 15 分钟冷却）。
-    返回入库事件 dict；冷却期内返回 None。
+    """事件入库 + 今日触发计数 + 分级通知。
+    - price_surge / price_drop（当日涨跌幅提醒）：每个交易日每股最多提醒一次；
+    - 其它类型：同股同类 15 分钟冷却。
+    返回入库事件 dict；冷却/已提醒期内返回 None。
     """
-    last = last_event_time(track['id'], event['event_type'])
-    if last is not None:
-        if last.tzinfo is not None:
-            last = last.astimezone().replace(tzinfo=None)  # UTC 存储 → 本地 naive
-        dt = (datetime.now() - last).total_seconds()
-        if dt < COOLDOWN_SECONDS:
+    if event['event_type'] in ('price_surge', 'price_drop'):
+        if _day_event_done(track['id'], event['event_type']):
             return None
+    else:
+        last = last_event_time(track['id'], event['event_type'])
+        if last is not None:
+            if last.tzinfo is not None:
+                last = last.astimezone().replace(tzinfo=None)  # UTC 存储 → 本地 naive
+            dt = (datetime.now() - last).total_seconds()
+            if dt < COOLDOWN_SECONDS:
+                return None
 
     ai_text = _ai_comment(track, event)
     detail = event.get('detail', '')
