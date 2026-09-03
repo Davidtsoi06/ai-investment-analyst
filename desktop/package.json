@@ -1,7 +1,7 @@
 {
   "name": "ai-investment-analyst",
   "productName": "AI投资分析软件",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "面向个人及家庭的 AI 驱动投资分析工具",
   "main": "dist/main/index.js",
   "author": "Davidtsoi06",
