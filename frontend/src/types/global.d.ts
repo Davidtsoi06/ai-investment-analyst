@@ -2,6 +2,9 @@ export {};
 
 declare global {
   interface Window {
+    app?: {
+      openExternal: (url: string) => Promise<unknown>;
+    };
     appInfo?: {
       versions: {
         app: string;

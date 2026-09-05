@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import * as path from 'path';
 import { createWindow } from './window';
 import { createTray } from './tray';
@@ -14,6 +14,14 @@ log('INFO', '主进程启动，userData=' + app.getPath('userData'));
 ipcMain.handle('backend:request', (_e, payload: { method: string; path: string; body?: unknown }) =>
   backendManager.request(payload.method, payload.path, payload.body)
 );
+// 打开外部链接（仅允许 http/https，经系统默认浏览器）
+ipcMain.handle('app:openExternal', (_e, url: string) => {
+  if (typeof url === 'string' && /^https?:\/\//.test(url)) {
+    void shell.openExternal(url);
+    return { ok: true };
+  }
+  return { ok: false };
+});
 ipcMain.handle('backend:status', () => backendManager.getStatus());
 
 // 单实例锁：避免重复启动

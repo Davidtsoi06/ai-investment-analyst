@@ -11,11 +11,13 @@ import { fmtPct, fmtPrice, num, toList, upDownCls } from '../lib/format';
 import {
   evaluateRecommendations,
   generateRecommendations,
+  getAiStatus,
   getRecommendationsHistory,
   getRecommendationsPerformance,
   getTodayRecommendations,
   parseApiError,
 } from '../services/api';
+import { Link } from 'react-router-dom';
 import type { BacktestRecentItem, HistoryItem, RecommendItem, TodayRecommendations } from '../services/api';
 
 const REC_TYPE_LABEL: Record<string, string> = { 短线: '短线', 长线: '长线', short: '短线', long: '长线' };
@@ -119,6 +121,9 @@ export default function Recommendation() {
   const [evaluating, setEvaluating] = useState(false);
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
+  // AI 最近错误（V1.0.7：规则降级原因可见化，不再"莫名降级"）
+  const [aiErr, setAiErr] = useState<{ last_error?: string; last_error_at?: string; configured?: boolean } | null>(null);
+
   const todaySeq = useRef(0);
 
   const loadToday = useCallback(async () => {
@@ -158,6 +163,9 @@ export default function Recommendation() {
     loadToday();
     loadBacktest();
     loadHistory();
+    getAiStatus().then((r) => {
+      if (r.ok && r.data) setAiErr(r.data as { last_error?: string; last_error_at?: string; configured?: boolean });
+    }).catch(() => {});
   }, [loadToday, loadBacktest, loadHistory]);
 
   const items = useMemo<RecommendItem[]>(() => toList<RecommendItem>(today?.items), [today]);
@@ -257,6 +265,18 @@ export default function Recommendation() {
           )}
           <span className="text-xs text-text-muted">短线 {shortRecs.length} · 长线 {longRecs.length}</span>
         </div>
+        {today?.source === 'rules' && aiErr && (aiErr.last_error || aiErr.configured === false) && (
+          <div className="mb-2 rounded border border-warning/40 bg-warning/5 px-3 py-2">
+            <p className="text-xs text-warning">
+              ⚠ {aiErr.last_error
+                ? 'AI 调用失败（' + (aiErr.last_error_at || '') + '）：' + aiErr.last_error
+                : '未检测到已配置的 AI Key'}
+            </p>
+            <p className="text-xs text-text-muted mt-0.5">
+              当前以「规则引擎」模式生成。请到 <Link to="/settings" className="text-primary-600 underline">系统设置 → DeepSeek AI 配置</Link> 检查 Key 并点「保存并测试」。
+            </p>
+          </div>
+        )}
         {todayError && <p className="text-sm text-danger mb-2">{todayError}</p>}
         {todayErrors.length > 0 && (
           <div className="text-xs text-warning mb-2 space-y-0.5">

@@ -254,7 +254,19 @@ def settings_put(data: SettingsIn, x_backend_token: str = Header(default="")):
 @app.post("/api/settings/ai-key")
 def ai_key_save(data: AiKeyIn, x_backend_token: str = Header(default="")):
     require_token(x_backend_token)
-    return save_ai_key(data.api_key)
+    result = save_ai_key(data.api_key)
+    if result.get('ok'):
+        from .services.llm_client import clear_ai_error
+        clear_ai_error()  # 保存新 Key 后清除历史 AI 错误记录
+    return result
+
+
+@app.get("/api/settings/ai-status")
+def ai_status_api(x_backend_token: str = Header(default="")):
+    """AI 连接状态（供设置页/推荐中心展示）：已配置/Key尾号/最近错误原因（不返回 Key 明文）"""
+    require_token(x_backend_token)
+    from .services.llm_client import ai_status
+    return ai_status()
 
 
 @app.post("/api/settings/ai-test")

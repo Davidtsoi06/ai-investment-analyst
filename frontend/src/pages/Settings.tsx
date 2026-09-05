@@ -3,7 +3,9 @@ import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import {
-  api, getSettings, saveSettings, saveAiKey, testAiKey, getBackendStatus, getProfile, saveProfile, parseApiError,
+  api, getSettings, saveSettings, saveAiKey, testAiKey, getBackendStatus, getProfile, saveProfile,
+  getAiStatus, parseApiError,
+  type AiStatus,
   type Profile as ProfileType,
   type Settings as SettingsType,
 } from '../services/api';
@@ -23,8 +25,10 @@ export default function Settings() {
   const [notifications, setNotifications] = useState<Record<string, boolean>>({});
   const [quietHours, setQuietHours] = useState({ enabled: true, start: '23:00', end: '07:00', urgent_exempt: true });
   const [aiConfigured, setAiConfigured] = useState(false);
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [aiMsg, setAiMsg] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
   const [backendStatus, setBackendStatus] = useState<{ running: boolean; version: string | null } | null>(null);
   const [savedMsg, setSavedMsg] = useState('');
   // 版本更新状态（对齐理财软件）
@@ -77,6 +81,7 @@ export default function Settings() {
 
   useEffect(() => {
     getBackendStatus().then(setBackendStatus).catch(() => null);
+    getAiStatus().then((r) => { if (r.ok && r.data) setAiStatus(r.data as AiStatus); }).catch(() => {});
     getProfile().then((r) => { if (r.ok && r.data) setProfile(r.data as ProfileType); }).catch(() => {});
     api<{ portfolio_dir?: string; data_dir?: string }>('GET', '/api/system/info').then((r) => {
       if (r.ok && r.data?.portfolio_dir) {
@@ -119,11 +124,29 @@ export default function Settings() {
     setTimeout(() => setSavedMsg(''), 3000);
   };
 
-  const saveKey = async () => {
-    if (!apiKey.trim()) return setAiMsg('请输入 API Key');
-    const r = await saveAiKey(apiKey.trim());
-    if (r.ok) { setAiConfigured(true); setAiMsg('已保存（加密存储）'); setApiKey(''); }
-    else setAiMsg(`保存失败：${parseApiError(r.error)}`);
+  /** 保存并测试（照搬理财软件交互）：先加密落库 → 立即用真实接口验证 → 显示具体结果/原因 */
+  const saveAndTestKey = async () => {
+    const key = apiKey.trim();
+    if (!key) return setAiMsg('请输入 API Key（以 sk- 开头）');
+    setAiBusy(true);
+    setAiMsg('正在保存并测试连接...');
+    const sv = await saveAiKey(key);
+    if (!sv.ok) {
+      setAiBusy(false);
+      setAiMsg('保存失败：' + parseApiError(sv.error));
+      return;
+    }
+    const r = await testAiKey(); // 后端读取刚保存的 Key（实时解密）测试真实接口
+    setAiBusy(false);
+    const err = (r.data as { error?: string })?.error || r.error || '未知错误';
+    if (r.ok) {
+      setAiMsg('已保存并测试通过 ✅（可用模型：' + ((r.data as { models?: string[] }).models?.join(', ') || '—') + '）');
+      setApiKey('');
+    } else {
+      setAiMsg('已保存，但测试未通过 ❌：' + err + '（Key 已加密保存，可重试或更换）');
+    }
+    const st = await getAiStatus();
+    if (st.ok && st.data) setAiStatus(st.data as AiStatus);
   };
 
   const saveProfileInfo = async () => {
@@ -140,11 +163,14 @@ export default function Settings() {
     setTimeout(() => setProfileMsg(''), 3000);
   };
 
-  const testKey = async () => {
-    setAiMsg('测试中...');
-    const r = await testAiKey(apiKey.trim() || undefined);
-    const err = (r.data as { error?: string })?.error || r.error || '未知错误';
-    setAiMsg(r.ok ? `连接成功 ✅（可用模型：${(r.data as { models?: string[] }).models?.join(', ')}）` : `连接失败：${err}`);
+  /** 打开 DeepSeek Key 申请页（桌面端经主进程 shell.openExternal；浏览器直接新窗口） */
+  const openKeyPage = () => {
+    const url = 'https://platform.deepseek.com/api_keys';
+    if (window.app?.openExternal) {
+      void window.app.openExternal(url);
+    } else {
+      window.open(url, '_blank');
+    }
   };
 
   return (
@@ -199,15 +225,50 @@ export default function Settings() {
       <Card>
         <div className="flex items-center gap-3 mb-3">
           <h2 className="font-bold text-sm">DeepSeek AI 配置</h2>
-          {aiConfigured ? <Badge variant="success">已配置</Badge> : <Badge variant="warning">未配置</Badge>}
+          {aiStatus?.configured ? (
+            <Badge variant="success">已配置（sk-****{aiStatus.key_tail || '••••'}）</Badge>
+          ) : aiConfigured ? (
+            <Badge variant="success">已配置</Badge>
+          ) : (
+            <Badge variant="warning">未配置</Badge>
+          )}
         </div>
-        <p className="text-xs text-text-muted mb-3">在 platform.deepseek.com 申请 API Key；密钥本地加密存储，绝不上传。</p>
+        <p className="text-xs text-text-muted mb-3">
+          在 <button className="text-primary-600 underline" onClick={openKeyPage}>platform.deepseek.com/api_keys</button> 申请
+          API Key；密钥本地加密存储，绝不上传。
+        </p>
+        {/* 状态异常提示（不再黑盒：解密失败 / 最近调用错误都可见） */}
+        {!aiStatus?.configured && aiStatus?.crypto_error && (
+          <div className="mb-3 rounded border border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger">
+            ⚠ {aiStatus.crypto_error} —— 请在下框重新填写 API Key 并「保存并测试」。
+          </div>
+        )}
+        {!aiStatus?.configured && !aiStatus?.crypto_error && aiStatus?.last_error && (
+          <div className="mb-3 rounded border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning">
+            ⚠ 最近一次 AI 调用失败（{aiStatus.last_error_at || ''}）：{aiStatus.last_error}
+          </div>
+        )}
+        {aiStatus?.configured && aiStatus?.last_error && (
+          <div className="mb-3 rounded border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning">
+            ⚠ 最近一次 AI 调用异常（{aiStatus.last_error_at || ''}）：{aiStatus.last_error}
+            <span className="text-text-muted">（若刚保存新 Key 会自动清除；持续出现请重试）</span>
+          </div>
+        )}
         <div className="flex gap-2">
-          <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..." className="flex-1 rounded border border-border px-3 py-2 text-sm outline-none focus:border-primary-500" />
-          <Button size="sm" onClick={saveKey}>保存</Button>
-          <Button size="sm" variant="secondary" onClick={testKey}>测试连接</Button>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void saveAndTestKey(); }}
+            placeholder={aiStatus?.configured ? '已保存 Key（sk-****' + (aiStatus.key_tail || '') + '），如需更换请输入新 Key' : 'sk-...'}
+            className="flex-1 rounded border border-border px-3 py-2 text-sm outline-none focus:border-primary-500"
+          />
+          <Button size="sm" onClick={saveAndTestKey} disabled={aiBusy || !apiKey.trim()}>
+            {aiBusy ? '保存并测试中...' : '保存并测试'}
+          </Button>
         </div>
-        {aiMsg && <p className="text-xs text-text-secondary mt-2">{aiMsg}</p>}
+        <p className="text-xs text-text-muted mt-2">保存后立即用真实接口验证；连接失败会显示具体原因（如 401 Key 无效 / 402 余额不足 / 网络错误）。</p>
+        {aiMsg && <p className="text-xs text-text-secondary mt-2 whitespace-pre-wrap">{aiMsg}</p>}
       </Card>
 
       <Card>

@@ -76,28 +76,28 @@ def save_settings(data: dict) -> dict:
 
 
 def save_ai_key(api_key: str) -> dict:
-    """加密存储 API Key，并同步到内存配置"""
+    """加密存储 API Key（明文不入库；每次读取时实时解密，与理财软件一致）"""
     key = api_key.strip()
     if not key:
         return {'ok': False, 'error': 'API Key 不能为空'}
     set_setting(AI_KEY_KEY, encrypt_text(key))
-    from ..config import settings
-    settings.deepseek_api_key = key
     logger.info('DeepSeek API Key 已加密保存')
     return {'ok': True}
 
 
 def get_ai_key() -> str:
-    from ..config import settings
-    if settings.deepseek_api_key:
-        return settings.deepseek_api_key
+    """读取 API Key：每次实时解密数据库密文（无内存缓存，避免进程重启/缓存不一致导致"有 Key 却读不到"）"""
     stored = get_setting(AI_KEY_KEY)
     if stored is None:
         return ''
-    key = decrypt_text(str(stored))
-    settings.deepseek_api_key = key
-    return key
+    return decrypt_text(str(stored))
 
 
 def ai_key_configured() -> bool:
     return bool(get_ai_key())
+
+
+def ai_key_tail() -> str:
+    """Key 尾号（用于界面展示，如 sk-****abcd；未配置返回空）"""
+    key = get_ai_key()
+    return key[-4:] if key else ''

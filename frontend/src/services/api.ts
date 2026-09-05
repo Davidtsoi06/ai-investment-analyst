@@ -54,6 +54,15 @@ export const getSettings = () => api<Settings>('GET', '/api/settings');
 export const saveSettings = (s: Partial<Settings>) => api<Settings>('PUT', '/api/settings', s);
 export const saveAiKey = (key: string) => api('POST', '/api/settings/ai-key', { api_key: key });
 export const testAiKey = (key?: string) => api<{ ok: boolean; models?: string[]; error?: string }>('POST', '/api/settings/ai-test', key ? { api_key: key } : {});
+/** AI 连接状态：configured / Key 尾号 / 最近错误原因（V1.0.7 错误可见化） */
+export interface AiStatus {
+  configured: boolean;
+  key_tail?: string;
+  crypto_error?: string;
+  last_error?: string;
+  last_error_at?: string;
+}
+export const getAiStatus = () => api<AiStatus>('GET', '/api/settings/ai-status');
 // ---- 自选股看板（S9） ----
 export interface WatchlistItem {
   id: number;
