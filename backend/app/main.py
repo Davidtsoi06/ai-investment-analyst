@@ -221,7 +221,8 @@ class SettingsIn(BaseModel):
 
 
 class AiKeyIn(BaseModel):
-    api_key: str
+    # 默认空串：POST /api/settings/ai-test 不传 body（{}）时按"用已保存 Key 测试"处理（V1.0.8）
+    api_key: str = ''
 
 
 @app.get("/api/profile")

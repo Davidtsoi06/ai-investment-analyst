@@ -53,7 +53,9 @@ export interface Settings {
 export const getSettings = () => api<Settings>('GET', '/api/settings');
 export const saveSettings = (s: Partial<Settings>) => api<Settings>('PUT', '/api/settings', s);
 export const saveAiKey = (key: string) => api('POST', '/api/settings/ai-key', { api_key: key });
-export const testAiKey = (key?: string) => api<{ ok: boolean; models?: string[]; error?: string }>('POST', '/api/settings/ai-test', key ? { api_key: key } : {});
+export const testAiKey = (key?: string) =>
+  // 不带 Key 时不发送请求体：后端用"库内已保存 Key"测试（发送 {} 会触发必填校验 422）
+  api<{ ok: boolean; models?: string[]; error?: string }>('POST', '/api/settings/ai-test', key ? { api_key: key } : undefined);
 /** AI 连接状态：configured / Key 尾号 / 最近错误原因（V1.0.7 错误可见化） */
 export interface AiStatus {
   configured: boolean;
