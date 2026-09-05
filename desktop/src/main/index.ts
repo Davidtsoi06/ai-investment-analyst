@@ -58,10 +58,20 @@ if (!app.requestSingleInstanceLock()) {
     app.quit();
   });
 
-  app.on('before-quit', () => {
-    // C: 标记退出中（窗口关闭逻辑据此放行），并停止后端进程
+  app.on('before-quit', (e) => {
+    // C: 标记退出中并等待后端完全停止（V1.0.10：确保旧版后端进程被杀干净，
+    // 避免升级后残留旧版后端占用端口，导致版本显示错误/新后端起不来）
+    if ((app as { isQuitting?: boolean }).isQuitting) return; // 第二次触发直接放行
+    e.preventDefault();
     (app as { isQuitting?: boolean }).isQuitting = true;
-    void backendManager.stop();
-    log('INFO', '应用退出中');
+    void (async () => {
+      try {
+        await backendManager.stop();
+      } catch (err) {
+        log('WARN', '[backend] 停止异常: ' + (err instanceof Error ? err.message : String(err)));
+      }
+      log('INFO', '应用退出中（后端已停止）');
+      app.exit(0);
+    })();
   });
 }
