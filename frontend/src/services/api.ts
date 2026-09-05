@@ -170,7 +170,10 @@ export interface TodayRecommendations {
   ok?: boolean;
   date?: string;
   cached?: boolean;
-  source?: 'ai' | 'rules' | string;
+  /** ai=AI生成 ai_empty=AI已分析暂无合适标的 rules=规则引擎（AI不可用降级） */
+  source?: 'ai' | 'ai_empty' | 'rules' | string;
+  /** 本次分析的用户意愿（如「酒类和科技股」；空=全面分析） */
+  intent?: string | null;
   items: RecommendItem[];
   blocked?: BlockedItem[];
   errors?: string[];
@@ -233,7 +236,9 @@ export interface EvaluateResult {
   skipped?: { id: number; symbol: string; reason: string }[];
 }
 
-export const generateRecommendations = () => api<TodayRecommendations>('POST', '/api/recommend/run');
+/** 生成今日推荐：intent 为用户意愿文本（如「酒类和科技股」），留空 = 全面分析 */
+export const generateRecommendations = (intent = '') =>
+  api<TodayRecommendations>('POST', '/api/recommend/run', intent ? { intent } : undefined);
 export const getTodayRecommendations = () => api<TodayRecommendations>('GET', '/api/recommend/today');
 export const getRecommendationsHistory = (limit = 50) =>
   api<HistoryItem[]>('GET', `/api/recommend/history?limit=${limit}`);

@@ -2,12 +2,14 @@
 // 契约：POST /api/chat/ask、GET /api/chat/history、GET /api/research/list、POST /api/research/interpret（后端契约见 t1）
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode, KeyboardEvent } from 'react';
+import { Link } from 'react-router-dom';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Loading from '../components/ui/Loading';
 import {
   askChat,
+  getAiStatus,
   getChatHistory,
   getResearchList,
   interpretResearch,
@@ -161,6 +163,9 @@ export default function Chat() {
   const listRef = useRef<HTMLDivElement>(null);
   const nextId = () => idRef.current++;
 
+  // ---- AI 连接状态（V1.0.9：有 Key 时不显示任何"无 Key"提示） ----
+  const [aiStatus, setAiStatus] = useState<{ configured: boolean; last_error?: string; last_error_at?: string } | null>(null);
+
   // ---- 对话历史 ----
   const [history, setHistory] = useState<ChatHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -189,6 +194,9 @@ export default function Chat() {
 
   useEffect(() => {
     loadHistory();
+    getAiStatus().then((r) => {
+      if (r.ok && r.data) setAiStatus(r.data as { configured: boolean; last_error?: string; last_error_at?: string });
+    }).catch(() => {});
   }, [loadHistory]);
 
   const send = useCallback(
@@ -324,6 +332,17 @@ export default function Chat() {
         </div>
       </div>
 
+      {/* AI 连接状态条：已配置不打扰；未配置才提示（V1.0.9） */}
+      {aiStatus && !aiStatus.configured && (
+        <div className="rounded border border-warning/40 bg-warning/5 px-3 py-1.5 shrink-0">
+          <p className="text-xs text-warning">
+            ⚠ 尚未检测到有效的 AI Key——回答将使用内置规则模式。请到{' '}
+            <Link to="/settings" className="underline">系统设置 → DeepSeek AI 配置</Link> 填写并「保存并测试」。
+            {aiStatus.last_error && <span className="text-text-muted">（最近错误：{aiStatus.last_error}）</span>}
+          </p>
+        </div>
+      )}
+
       {tab === 'chat' ? (
         <div className="flex gap-4 items-stretch flex-1 min-h-0">
           {/* 聊天主区 */}
@@ -362,7 +381,7 @@ export default function Chat() {
                         style={{ animationDelay: i * 0.15 + 's' }}
                       />
                     ))}
-                    <span className="text-xs text-text-muted ml-1">AI 思考中（无 Key 时自动降级规则模式）...</span>
+                    <span className="text-xs text-text-muted ml-1">AI 正在结合实时行情与您的持仓分析...</span>
                   </div>
                 </div>
               )}

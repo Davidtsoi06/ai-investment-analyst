@@ -121,6 +121,10 @@ export default function Recommendation() {
   const [evaluating, setEvaluating] = useState(false);
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
+  // V1.0.9：按意愿生成（弹出意图输入框）
+  const [intentOpen, setIntentOpen] = useState(false);
+  const [intentText, setIntentText] = useState('');
+
   // AI 最近错误（V1.0.7：规则降级原因可见化，不再"莫名降级"）
   const [aiErr, setAiErr] = useState<{ last_error?: string; last_error_at?: string; configured?: boolean } | null>(null);
 
@@ -183,10 +187,18 @@ export default function Recommendation() {
   const btMonths = useMemo(() => toList<Record<string, unknown>>(backtest?.by_month), [backtest]);
   const btRecent = useMemo(() => toList<BacktestRecentItem>(backtest?.recent), [backtest]);
 
-  const handleGenerate = async () => {
+  const openIntent = () => {
+    setIntentText('');
+    setIntentOpen(true);
+  };
+
+  const closeIntent = () => setIntentOpen(false);
+
+  const handleGenerate = async (intent = '') => {
+    setIntentOpen(false);
     setGenerating(true);
     setMsg(null);
-    const r = await generateRecommendations();
+    const r = await generateRecommendations(intent);
     setGenerating(false);
     if (!r.ok) {
       setMsg({ type: 'err', text: '生成失败：' + parseApiError(r.error) });
@@ -197,16 +209,17 @@ export default function Recommendation() {
       const list = d.items;
       const sc = list.filter(isShort).length;
       const lc = list.length - sc;
+      const scope = intent.trim() ? '（范围：' + intent.trim() + '）' : '';
       setMsg({
         type: 'ok',
-        text: (d.cached ? '已是最新（缓存）' : '已生成') + '：短线 ' + sc + ' 条 · 长线 ' + lc + ' 条'
-          + (d.source === 'rules' ? '（规则降级）' : ''),
+        text: (d.cached ? '已是最新（缓存）' : '已生成') + scope + '：短线 ' + sc + ' 条 · 长线 ' + lc + ' 条'
+          + (d.source === 'rules' ? '（规则引擎）' : d.source === 'ai_empty' ? '（AI 暂无合适标的）' : ''),
       });
     } else {
       setMsg({ type: 'ok', text: '生成完成' });
     }
     await Promise.all([loadToday(), loadBacktest(), loadHistory()]);
-    window.setTimeout(() => setMsg(null), 5000);
+    window.setTimeout(() => setMsg(null), 6000);
   };
 
   const handleEvaluate = async () => {
@@ -237,11 +250,11 @@ export default function Recommendation() {
           <Button variant="secondary" size="sm" onClick={loadToday} disabled={todayLoading}>
             {todayLoading ? '刷新中...' : '刷新'}
           </Button>
-          <Button onClick={handleGenerate} disabled={generating}>
+          <Button onClick={openIntent} disabled={generating}>
             {generating
-              ? '正在分析候选股票（约 5~15 秒）...'
+              ? '正在分析候选股票（约 10~30 秒）...'
               : today?.cached === true
-                ? '重新生成（覆盖今日）'
+                ? '重新生成（可按意愿）'
                 : '生成今日推荐'}
           </Button>
         </div>
@@ -254,10 +267,21 @@ export default function Recommendation() {
           <h2 className="font-bold text-sm">今日推荐</h2>
           {todayDate && <span className="text-xs text-text-muted">{todayDate}</span>}
           {today?.source && (
-            <span title={today.source === 'ai' ? '由 DeepSeek 大模型综合研判生成' : '未配置 AI Key 或 AI 调用失败时，由内置规则引擎按技术形态与估值评分生成'}>
-              <Badge variant={today.source === 'ai' ? 'info' : 'warning'}>
-                {today.source === 'ai' ? 'AI 生成' : '规则降级'}
+            <span title={
+              today.source === 'ai' ? '由 DeepSeek 大模型综合研判生成'
+                : today.source === 'ai_empty' ? 'AI 已正常分析，但当前这些候选均未达到推荐标准'
+                  : '未配置 AI Key 或 AI 调用失败时，由内置规则引擎按技术形态与估值评分生成'
+            }>
+              <Badge variant={today.source === 'ai' ? 'info' : today.source === 'ai_empty' ? 'default' : 'warning'}>
+                {today.source === 'ai' ? 'AI 生成'
+                  : today.source === 'ai_empty' ? 'AI 已分析（暂无合适标的）'
+                    : '规则引擎'}
               </Badge>
+            </span>
+          )}
+          {today?.intent && (
+            <span className="text-xs text-primary-700 bg-primary-50 border border-primary-100 rounded-full px-2 py-0.5" title="本次推荐的分析范围">
+              📌 范围：{today.intent}
             </span>
           )}
           {today?.cached === true && (
@@ -307,13 +331,16 @@ export default function Recommendation() {
               )}
               {today.source === 'rules' && (
                 <p className="text-xs text-text-muted mt-1">
-                  当前处于「规则降级」模式：未配置 DeepSeek Key 或 AI 调用失败时，由内置规则引擎按技术形态/估值评分筛选，标准较 AI 更保守。
+                  当前由内置「规则引擎」筛选（AI 不可用降级）。可点下方按钮按意愿重新生成，或到设置检查 AI 配置。
                 </p>
               )}
-              <div className="mt-3">
-                <Button size="sm" onClick={handleGenerate} disabled={generating}>
+              <div className="mt-3 flex items-center gap-2">
+                <Button size="sm" onClick={openIntent} disabled={generating}>
                   {generating ? '正在分析...' : today.cached === true ? '重新生成' : '生成今日推荐'}
                 </Button>
+                {today.source === 'ai_empty' && (
+                  <span className="text-xs text-text-muted">换个行业/范围再试，可能找到合适标的</span>
+                )}
               </div>
             </div>
           ) : (
@@ -507,6 +534,51 @@ export default function Recommendation() {
           </div>
         )}
       </Card>
+
+      {/* 按意愿生成 Modal（V1.0.9） */}
+      {intentOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeIntent}>
+          <div
+            className="bg-surface rounded-xl shadow-xl w-full max-w-md p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-base font-bold text-primary-900">想要哪方面的推荐？</h3>
+              <button onClick={closeIntent} className="text-text-muted hover:text-text px-2 text-lg leading-none">×</button>
+            </div>
+            <p className="text-xs text-text-muted mb-3">
+              输入您想看的行业/类型，AI 会解析并按此范围分析候选股。不输入则全面分析。
+            </p>
+            <textarea
+              value={intentText}
+              onChange={(e) => setIntentText(e.target.value)}
+              rows={2}
+              autoFocus
+              placeholder="例如：酒类的股票以及科技股"
+              className="w-full rounded border border-border px-3 py-2 text-sm outline-none focus:border-primary-500 resize-none"
+            />
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {['白酒', '科技/半导体', '新能源车', '银行高股息', '医药', 'AI/算力', '军工', '港股互联网'].map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setIntentText(c)}
+                  className={'text-xs rounded-full px-2.5 py-1 border transition-colors ' + (intentText === c ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-border text-text-secondary hover:border-primary-300')}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => handleGenerate('')} disabled={generating}>
+                不指定（全面分析）
+              </Button>
+              <Button size="sm" onClick={() => handleGenerate(intentText.trim())} disabled={generating || !intentText.trim()}>
+                {generating ? '分析中（约 10~30 秒）...' : '按此范围分析'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

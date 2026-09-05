@@ -578,11 +578,17 @@ def recommend_today(x_backend_token: str = Header(default="")):
     return generate_recommendations(force=False)
 
 
+class RecommendRunIn(BaseModel):
+    """按用户意愿生成推荐（V1.0.9）：intent 如「酒类和科技股」；留空 = 全面分析"""
+    intent: str = ''
+
+
 @app.post("/api/recommend/run")
-def recommend_run(x_backend_token: str = Header(default="")):
-    """手动触发重新生成当日推荐"""
+def recommend_run(data: RecommendRunIn | None = None, x_backend_token: str = Header(default="")):
+    """手动触发重新生成当日推荐；可带 intent（用户想看的行业/类型）"""
     require_token(x_backend_token)
-    return generate_recommendations(force=True)
+    intent = (data.intent if data else '') or ''
+    return generate_recommendations(force=True, intent=intent)
 
 
 @app.get("/api/recommend/history")
@@ -609,10 +615,11 @@ def recommend_backtest_evaluate(x_backend_token: str = Header(default="")):
 # ---- 契约别名（/api/recommendations/*，与 /api/recommend/* 等价） ----
 
 @app.post("/api/recommendations/generate")
-def recommendations_generate(x_backend_token: str = Header(default="")):
-    """生成今日推荐（已生成返回 existing:true，不重复生成）"""
+def recommendations_generate(data: RecommendRunIn | None = None, x_backend_token: str = Header(default="")):
+    """生成今日推荐（已生成返回 existing:true，不重复生成）；可带 intent"""
     require_token(x_backend_token)
-    result = generate_recommendations(force=False)
+    intent = (data.intent if data else '') or ''
+    result = generate_recommendations(force=False, intent=intent)
     result['existing'] = result.get('cached', False)
     return result
 
