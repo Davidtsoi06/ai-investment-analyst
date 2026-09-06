@@ -71,15 +71,7 @@ export default function App() {
     };
   }, []);
 
-  if (onboarded === null) {
-    return (
-      <div className="min-h-screen bg-primary-50 flex items-center justify-center">
-        <Loading text="正在连接本地服务..." />
-      </div>
-    );
-  }
-
-  // ---- V1.1.0 N1：低余额弹窗（≤¥5，今日一次） ----
+  // ---- V1.1.0 N1：低余额弹窗（Hooks 必须无条件声明——曾放条件 return 后导致 React 崩溃白屏，v1.1.2 修复） ----
   const [lowBal, setLowBal] = useState(false);
   const dismissKey = 'ai_low_balance_dismiss';
   useEffect(() => {
@@ -112,6 +104,14 @@ export default function App() {
     try { localStorage.setItem(dismissKey, new Date().toISOString().slice(0, 10)); } catch { /* ignore */ }
     setLowBal(false);
   };
+
+  if (onboarded === null) {
+    return (
+      <div className="min-h-screen bg-primary-50 flex items-center justify-center">
+        <Loading text="正在连接本地服务..." />
+      </div>
+    );
+  }
 
   if (!onboarded) {
     return (
