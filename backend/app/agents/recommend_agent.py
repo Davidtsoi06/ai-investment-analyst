@@ -128,17 +128,45 @@ def _load_holdings() -> list[dict]:
         conn.close()
 
 
-def _candidate_pool(profile: dict, intent: str = '') -> list[dict]:
-    """候选池（V1.0.9）：
-    1. 用户指定意愿（intent）→ 行业词典解析出的股票优先；
-    2. 否则用自选股（按画像市场过滤）；
-    3. 数量不足 MIN_POOL_SIZE 时用蓝筹兜底池补足（避免候选太少导致空推荐）。"""
+def _candidate_pool(profile: dict, intent: str = '', scope_type: str = 'market',
+                    groups: list[str] | None = None) -> list[dict]:
+    """候选池（V1.1.0）：
+    - scope_type='pool'：只取「我的股票池」指定分组（groups 空=全部组），不做蓝筹补足
+    - scope_type='market'：1) 用户意愿 intent 行业词典优先 2) 自选股 3) 蓝筹补足到 MIN_POOL_SIZE"""
     markets = [m for m in (profile.get('markets') or []) if m in ('A股', '港股')]
     if not markets:
         markets = ['A股']
 
+    if scope_type == 'pool':
+        # 仅从股票池（watchlist 分组）取；按画像市场过滤，不补足
+        conn = get_connection()
+        try:
+            if groups:
+                marks = ','.join('?' * len(groups))
+                rows = conn.execute(
+                    f'SELECT symbol, name, market FROM watchlist WHERE group_name IN ({marks}) '
+                    'ORDER BY group_name, sort_order, id',
+                    groups,
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    'SELECT symbol, name, market FROM watchlist ORDER BY group_name, sort_order, id'
+                ).fetchall()
+        finally:
+            conn.close()
+        pool = [dict(r) for r in rows if dict(r).get('market') in markets]
+        # 分组内去重（同代码多组场景）
+        seen: set = set()
+        dedup = []
+        for c in pool:
+            k = (c['symbol'], c.get('market', ''))
+            if k not in seen:
+                seen.add(k)
+                dedup.append(c)
+        return dedup[:MAX_CANDIDATES]
+
     pool: list[dict] = []
-    seen: set[tuple] = set()
+    seen = set()
 
     def _add(c: dict) -> None:
         k = (c['symbol'], c.get('market', ''))
@@ -186,10 +214,11 @@ def _related_news(name: str, symbol: str, limit: int = 3) -> list[str]:
 
 
 def _short_rule(symbol: str, name: str, market: str, quote, snap: dict) -> dict | None:
-    """规则引擎短线推荐（评分不足返回 None）"""
+    """规则引擎短线推荐。V1.1.0：评分 60+ = 推荐级(rec)；40~59 = 观察级(watch，用于数量补足)"""
     score = score_short_term(snap)
     if score < 40:
         return None
+    tier = 'rec' if score >= 60 else 'watch'
     close = float(quote.price)
     entry_min = round(close * 0.99, 2)
     entry_max = round(close * 1.02, 2)
@@ -216,6 +245,7 @@ def _short_rule(symbol: str, name: str, market: str, quote, snap: dict) -> dict 
         'logic': '；'.join(signals) + f'（规则评分 {score}）',
         'risk_level': risk,
         'price': close,
+        'tier': tier,
     }
 
 
@@ -226,6 +256,7 @@ def _long_rule(symbol: str, name: str, market: str, quote, snap: dict) -> dict |
     score = score_long_term(snap, pe, pb)
     if score < 45:
         return None
+    tier = 'rec' if score >= 65 else 'watch'  # V1.1.0：观察级用于数量补足
     close = float(quote.price)
     valuation_min = round(close * 0.92, 2)
     valuation_max = round(close * 1.08, 2)
@@ -261,6 +292,7 @@ def _long_rule(symbol: str, name: str, market: str, quote, snap: dict) -> dict |
         'logic': '；'.join(logic_parts) + f'（规则评分 {score}）',
         'risk_level': risk,
         'price': close,
+        'tier': tier,
     }
 
 
@@ -338,8 +370,8 @@ def _sanitize_ai_item(item: dict, candidates_by_symbol: dict) -> dict | None:
     }
 
 
-def _ai_entries(candidates: list[dict]) -> tuple[list[dict], str]:
-    """AI 生成短线 + 长线条目。
+def _ai_entries(candidates: list[dict], mode: str = 'both') -> tuple[list[dict], str]:
+    """AI 生成短线/长线条目（V1.1.0 mode 可分开生成）。AI 条目均为推荐级 tier=rec。
     返回状态：'ai'=AI成功且有条目；'ai_empty'=AI成功但认为无合适标的；'rules'=未配置/调用失败降级"""
     if not _ai_configured():
         return [], 'rules'
@@ -372,18 +404,22 @@ def _ai_entries(candidates: list[dict]) -> tuple[list[dict], str]:
     entries: list[dict] = []
     ai_ok = True
     try:
-        short_raw = _call_ai(build_short_prompt(short_cands))
-        for it in short_raw or []:
-            it['rec_type'] = '短线'
-            e = _sanitize_ai_item(it, candidates_by_symbol)
-            if e:
-                entries.append(e)
-        long_raw = _call_ai(build_long_prompt(long_cands))
-        for it in long_raw or []:
-            it['rec_type'] = '长线'
-            e = _sanitize_ai_item(it, candidates_by_symbol)
-            if e:
-                entries.append(e)
+        if mode in ('short', 'both'):
+            short_raw = _call_ai(build_short_prompt(short_cands))
+            for it in short_raw or []:
+                it['rec_type'] = '短线'
+                e = _sanitize_ai_item(it, candidates_by_symbol)
+                if e:
+                    e['tier'] = 'rec' if (e.get('confidence') or 0) >= 60 else 'watch'
+                    entries.append(e)
+        if mode in ('long', 'both'):
+            long_raw = _call_ai(build_long_prompt(long_cands))
+            for it in long_raw or []:
+                it['rec_type'] = '长线'
+                e = _sanitize_ai_item(it, candidates_by_symbol)
+                if e:
+                    e['tier'] = 'rec' if (e.get('confidence') or 0) >= 60 else 'watch'
+                    entries.append(e)
     except Exception as e:  # noqa: BLE001
         ai_ok = False
         logger.warning('AI 推荐失败，降级规则引擎: %s', str(e)[:120])
@@ -395,35 +431,65 @@ def _ai_entries(candidates: list[dict]) -> tuple[list[dict], str]:
 
 # ---------------- 主流程 ----------------
 
-def _load_today(today: str) -> list[dict]:
+def _load_today(today: str, mode: str = 'both') -> list[dict]:
+    """当日推荐（mode: short/long/both 按类型过滤）"""
     conn = get_connection()
     try:
-        rows = conn.execute(
-            "SELECT id, symbol, name, market, rec_type, entry_min, entry_max, stop_loss, target, "
-            "valuation_min, valuation_max, confidence, logic, risk_level, rec_date, rec_price, status "
-            "FROM recommendations WHERE rec_date = ? ORDER BY rec_type, id",
-            (today,),
-        ).fetchall()
+        if mode == 'both':
+            rows = conn.execute(
+                "SELECT id, symbol, name, market, rec_type, entry_min, entry_max, stop_loss, target, "
+                "valuation_min, valuation_max, confidence, logic, risk_level, rec_date, rec_price, status, tier "
+                "FROM recommendations WHERE rec_date = ? ORDER BY rec_type, id",
+                (today,),
+            ).fetchall()
+        else:
+            rtype = '短线' if mode == 'short' else '长线'
+            rows = conn.execute(
+                "SELECT id, symbol, name, market, rec_type, entry_min, entry_max, stop_loss, target, "
+                "valuation_min, valuation_max, confidence, logic, risk_level, rec_date, rec_price, status, tier "
+                "FROM recommendations WHERE rec_date = ? AND rec_type = ? ORDER BY id",
+                (today, rtype),
+            ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def _save_entries(entries: list[dict], today: str) -> int:
+def _tier_fill(entries: list[dict], target: int = 5, cap: int = 10) -> list[dict]:
+    """方案 C：推荐级(rec)优先展示（≤cap 且 ≥1）；推荐级不足 target 时，
+    用观察级(watch)补足到 target。返回排序后的列表（rec 在前）。"""
+    recs = [e for e in entries if e.get('tier') != 'watch']
+    watch = [e for e in entries if e.get('tier') == 'watch']
+    out = recs[:cap]
+    need = max(0, min(target - len(out), len(watch), cap - len(out)))
+    out += watch[:need]
+    return out
+
+
+def _save_entries(entries: list[dict], today: str, mode: str = 'both') -> int:
+    """保存当日推荐（V1.1.0：mode 区分短线/长线独立覆盖；tier rec/watch 落库）"""
     conn = get_connection()
     now = utc_now()
     try:
-        conn.execute("DELETE FROM recommendations WHERE rec_date = ? AND status = 'open'", (today,))
+        if mode == 'both':
+            conn.execute("DELETE FROM recommendations WHERE rec_date = ? AND status = 'open'", (today,))
+        else:
+            rtype = '短线' if mode == 'short' else '长线'
+            conn.execute(
+                "DELETE FROM recommendations WHERE rec_date = ? AND status = 'open' AND rec_type = ?",
+                (today, rtype),
+            )
         for e in entries:
             conn.execute(
                 '''INSERT INTO recommendations
                 (symbol, name, market, rec_type, entry_min, entry_max, stop_loss, target,
-                 valuation_min, valuation_max, confidence, logic, risk_level, rec_date, rec_price, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)''',
+                 valuation_min, valuation_max, confidence, logic, risk_level, rec_date, rec_price, status, tier, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)''',
                 (e['symbol'], e['name'], e['market'], e['rec_type'],
                  e.get('entry_min'), e.get('entry_max'), e.get('stop_loss'), e.get('target'),
                  e.get('valuation_min'), e.get('valuation_max'),
-                 e['confidence'], e['logic'], e['risk_level'], today, e['price'], now),
+                 e['confidence'], e['logic'], e['risk_level'], today, e['price'],
+                 e.get('tier') or 'rec', now),
             )
         conn.commit()
         return len(entries)
@@ -474,30 +540,43 @@ def _macro_constraint(entries: list[dict]) -> tuple[list[dict], list[dict]]:
     return passed, blocked
 
 
-def generate_recommendations(force: bool = False, intent: str = '') -> dict:
-    """生成当日推荐（V1.0.9 支持按用户意愿 intent）。
-    force=False 且当日已有推荐时直接返回缓存结果（intent 为空时读取缓存；指定 intent 强制按新意愿重算）。
-
-    返回：{ok, date, cached, source, intent, items, blocked, errors}
+def generate_recommendations(force: bool = False, intent: str = '', mode: str = 'both',
+                              scope_type: str = 'market', groups: list[str] | None = None) -> dict:
+    """生成当日推荐（V1.1.0）：
+    - mode: both/short/long（短线/长线可独立生成，各自当日缓存互不覆盖）
+    - scope_type: market=全市场自动候选（自选+蓝筹补足）；pool=仅从我的股票池指定分组分析（不足不补）
+    - groups: scope_type='pool' 时的分组名列表（空=全部组）
+    返回：{ok, date, cached, source, mode, scope, items, blocked, errors}
     source: ai=AI生成 ai_empty=AI已分析但无合适标的 rules=规则引擎（AI不可用降级）
     """
     profile = _load_profile()
     today = date.today().isoformat()
     intent = (intent or '').strip()
+    mode = mode if mode in ('short', 'long', 'both') else 'both'
+    scope_type = 'pool' if scope_type == 'pool' else 'market'
+    groups = [str(g).strip() for g in (groups or []) if str(g).strip()] or None
 
     # 记录本次意愿（供 today/cached 响应回显；空意愿则清除）
     _save_intent(intent, today)
 
+    # 缓存：同 mode 已有当日结果且未指定意图时直接返回（短线/长线各自独立）
     if not force and not intent:
-        existing = _load_today(today)
+        existing = _load_today(today, mode)
         if existing:
-            return {'ok': True, 'date': today, 'cached': True,
+            return {'ok': True, 'date': today, 'cached': True, 'mode': mode, 'scope': scope_type,
                     'source': 'ai' if any('AI' in (it.get('logic') or '') for it in existing) else 'rules',
                     'items': existing, 'blocked': [], 'errors': [],
                     'candidate_count': 0, 'pool_size': 0, 'empty_reason': None,
                     'intent': _load_intent()}
 
-    candidates = _candidate_pool(profile, intent)
+    candidates = _candidate_pool(profile, intent, scope_type, groups)
+    scope_desc = ('我的股票池' + ('：' + '、'.join(groups) if groups else '（全部组）')) if scope_type == 'pool' else '全市场自动候选'
+    if scope_type == 'pool' and len(candidates) < 5:
+        # 用户决策：池太小不补蓝筹，直接提示
+        return {'ok': False, 'reason': f'您的股票池仅 {len(candidates)} 只（不足 5 只），请先到「我的股票池」添加观察股',
+                'date': today, 'mode': mode, 'scope': scope_type, 'cached': False,
+                'source': 'rules', 'items': [], 'blocked': [], 'errors': [],
+                'candidate_count': 0, 'pool_size': len(candidates), 'empty_reason': '股票池太小', 'intent': intent}
     holdings = _load_holdings()
     enriched: list[dict] = []
     errors: list[str] = []
@@ -535,18 +614,20 @@ def generate_recommendations(force: bool = False, intent: str = '') -> dict:
             elif err:
                 errors.append(err)
 
-    # 1) 规则引擎保底
+    # 1) 规则引擎保底（按 mode 只跑对应类型；规则条目带 tier rec/watch）
     rule_entries: list[dict] = []
     for c in enriched:
-        s = _short_rule(c['symbol'], c['name'], c['market'], c['quote'], c['snap'])
-        if s:
-            rule_entries.append(s)
-        l = _long_rule(c['symbol'], c['name'], c['market'], c['quote'], c['snap'])
-        if l:
-            rule_entries.append(l)
+        if mode in ('short', 'both'):
+            s = _short_rule(c['symbol'], c['name'], c['market'], c['quote'], c['snap'])
+            if s:
+                rule_entries.append(s)
+        if mode in ('long', 'both'):
+            l = _long_rule(c['symbol'], c['name'], c['market'], c['quote'], c['snap'])
+            if l:
+                rule_entries.append(l)
 
-    # 2) AI 生成（失败降级规则）
-    ai_entries, source = _ai_entries(enriched)
+    # 2) AI 生成（失败降级规则；mode 独立）
+    ai_entries, source = _ai_entries(enriched, mode)
     if ai_entries:
         by_key = {(e['symbol'], e['rec_type']): e for e in ai_entries}
         for r in rule_entries:
@@ -554,6 +635,9 @@ def generate_recommendations(force: bool = False, intent: str = '') -> dict:
         merged = list(by_key.values())
     else:
         merged = rule_entries
+
+    # 2.5) V1.1.0 数量补足（方案 C：推荐级不足 5 时用观察级补到 5+）
+    merged = _tier_fill(merged)
 
     # 3) 约束过滤
     result = apply_constraints(merged, profile, holdings)
@@ -574,7 +658,7 @@ def generate_recommendations(force: bool = False, intent: str = '') -> dict:
     else:
         final_source = 'rules'
 
-    saved = _save_entries(result['passed'], today) if result['passed'] else 0
+    saved = _save_entries(result['passed'], today, mode) if result['passed'] else 0
     if saved:
         _notify(result['passed'], final_source)
     logger.info('推荐生成完成: 候选 %d → 规则 %d / AI %s(最终%s) → 通过约束 %d / 拦截 %d',
@@ -599,8 +683,11 @@ def generate_recommendations(force: bool = False, intent: str = '') -> dict:
         'date': today,
         'cached': False,
         'source': final_source,
+        'mode': mode,
+        'scope': scope_type,
+        'scope_desc': scope_desc,
         'intent': _load_intent(),
-        'items': _load_today(today),
+        'items': _load_today(today, mode),
         'blocked': result['blocked'],
         'errors': errors,
         'candidate_count': len(enriched),

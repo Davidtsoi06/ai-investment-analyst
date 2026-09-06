@@ -4,7 +4,7 @@ import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import {
   api, getSettings, saveSettings, saveAiKey, testAiKey, getBackendStatus, getProfile, saveProfile,
-  getAiStatus, parseApiError,
+  getAiStatus, getAiBalance, parseApiError,
   type AiStatus,
   type Profile as ProfileType,
   type Settings as SettingsType,
@@ -29,6 +29,21 @@ export default function Settings() {
   const [apiKey, setApiKey] = useState('');
   const [aiMsg, setAiMsg] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiBalBusy, setAiBalBusy] = useState(false);
+  const [aiBalError, setAiBalError] = useState('');
+
+  const refreshBalance = async () => {
+    setAiBalBusy(true);
+    setAiBalError('');
+    const r = await getAiBalance();
+    setAiBalBusy(false);
+    if (r.ok && (r.data as { ok?: boolean })?.ok !== false && r.data && (r.data as { balance?: number }).balance != null) {
+      const d = r.data as { balance: number; currency: string; fetched_at: string };
+      setAiStatus((prev) => ({ configured: prev?.configured ?? false, ...(prev || {}), balance: d.balance, balance_currency: d.currency || 'CNY', balance_fetched_at: d.fetched_at, balance_low: d.balance <= 5 }));
+    } else {
+      setAiBalError(((r.data as { error?: string })?.error) || r.error || '余额查询失败');
+    }
+  };
   const [backendStatus, setBackendStatus] = useState<{ running: boolean; version: string | null } | null>(null);
   const [savedMsg, setSavedMsg] = useState('');
   // 版本更新状态（对齐理财软件）
@@ -269,6 +284,43 @@ export default function Settings() {
         </div>
         <p className="text-xs text-text-muted mt-2">保存后立即用真实接口验证；连接失败会显示具体原因（如 401 Key 无效 / 402 余额不足 / 网络错误）。</p>
         {aiMsg && <p className="text-xs text-text-secondary mt-2 whitespace-pre-wrap">{aiMsg}</p>}
+
+        {/* V1.1.0 N1：余额与今日用量（照搬理财软件布局） */}
+        <div className="mt-4 rounded-lg border border-border bg-bg-secondary/40 px-4 py-3">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="flex-1">
+              <div className="text-xs text-text-muted">
+                API 余额（DeepSeek）{aiStatus?.balance_fetched_at ? ' · 更新于 ' + aiStatus.balance_fetched_at.slice(11, 16) : ''}
+              </div>
+              {aiStatus?.balance != null ? (
+                <div className={'text-xl font-bold font-number ' + (Number(aiStatus.balance) <= 5 ? 'text-danger' : 'text-success')}>
+                  ¥ {Number(aiStatus.balance).toFixed(2)}
+                  <span className="text-xs text-text-muted font-normal ml-1">CNY</span>
+                </div>
+              ) : (
+                <div className="text-sm text-text-muted">{aiBalError || '点击「刷新余额」查询'}</div>
+              )}
+            </div>
+            <Button variant="secondary" size="sm" onClick={refreshBalance} disabled={aiBalBusy}>
+              {aiBalBusy ? '⏳ 查询中...' : '🔄 刷新余额'}
+            </Button>
+          </div>
+          <div className="flex gap-2">
+            <div className="flex-1 rounded bg-bg-secondary px-2 py-2 text-center border border-border">
+              <div className="text-lg font-bold font-number">{aiStatus?.usage?.calls ?? 0}</div>
+              <div className="text-[11px] text-text-muted">今日调用次数</div>
+            </div>
+            <div className="flex-1 rounded bg-bg-secondary px-2 py-2 text-center border border-border">
+              <div className="text-lg font-bold font-number">{(aiStatus?.usage?.promptTokens ?? 0).toLocaleString()}</div>
+              <div className="text-[11px] text-text-muted">今日输入 tokens</div>
+            </div>
+            <div className="flex-1 rounded bg-bg-secondary px-2 py-2 text-center border border-border">
+              <div className="text-lg font-bold font-number">{(aiStatus?.usage?.completionTokens ?? 0).toLocaleString()}</div>
+              <div className="text-[11px] text-text-muted">今日输出 tokens</div>
+            </div>
+          </div>
+          <p className="text-xs text-text-muted mt-2">用量由本机统计（每次 AI 调用后自动记录）；余额来自 DeepSeek 官方接口，调用 AI 后自动刷新。</p>
+        </div>
       </Card>
 
       <Card>

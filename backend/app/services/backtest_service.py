@@ -192,7 +192,7 @@ def recommendation_history(limit: int = 50) -> list[dict]:
     try:
         rows = conn.execute(
             '''SELECT r.id, r.symbol, r.name, r.market, r.rec_type, r.confidence, r.logic, r.risk_level,
-                      r.rec_date, r.rec_price, r.status,
+                      r.rec_date, r.rec_price, r.status, r.tier,
                       p.outcome, p.result_pct, p.result_price, p.eval_days
                FROM recommendations r
                LEFT JOIN recommendation_performance p

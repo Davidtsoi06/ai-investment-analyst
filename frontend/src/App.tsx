@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import AppLayout from './layouts/AppLayout';
 import Loading from './components/ui/Loading';
+import Button from './components/ui/Button';
 import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import News from './pages/News';
@@ -14,13 +15,14 @@ import Risk from './pages/Risk';
 import Review from './pages/Review';
 import Chat from './pages/Chat';
 import Settings from './pages/Settings';
-import { getProfile } from './services/api';
+import { getAiStatus, getProfile } from './services/api';
 
 /** 引导完成标记：写在本机 localStorage，任何版本更新/重启都不会再要求填写（仅首次使用弹出） */
 const ONBOARDED_LS_KEY = 'ai_invest_onboarded_v1';
 
 export default function App() {
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
+  const [aiBal, setAiBal] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -76,6 +78,40 @@ export default function App() {
     );
   }
 
+  // ---- V1.1.0 N1：低余额弹窗（≤¥5，今日一次） ----
+  const [lowBal, setLowBal] = useState(false);
+  const dismissKey = 'ai_low_balance_dismiss';
+  useEffect(() => {
+    if (!onboarded) return;
+    let alive = true;
+    const check = async () => {
+      try {
+        const r = await getAiStatus();
+        if (!alive || !r.ok || !r.data) return;
+        const d = r.data as { balance_low?: boolean; balance?: number | null; balance_currency?: string };
+        if (d.balance != null) setAiBal(Number(d.balance));
+        if (!d.balance_low || d.balance == null) return;
+        let dismissed = '';
+        try { dismissed = localStorage.getItem(dismissKey) || ''; } catch { /* ignore */ }
+        const today = new Date().toISOString().slice(0, 10);
+        if (dismissed !== today) setLowBal(true);
+      } catch { /* ignore */ }
+    };
+    void check();
+    const t = window.setInterval(check, 5 * 60 * 1000);
+    return () => { alive = false; window.clearInterval(t); };
+  }, [onboarded]);
+
+  const openTopUp = () => {
+    const url = 'https://platform.deepseek.com/top_up';
+    if (window.app?.openExternal) void window.app.openExternal(url);
+    else window.open(url, '_blank');
+  };
+  const dismissLowBal = () => {
+    try { localStorage.setItem(dismissKey, new Date().toISOString().slice(0, 10)); } catch { /* ignore */ }
+    setLowBal(false);
+  };
+
   if (!onboarded) {
     return (
       <Onboarding
@@ -88,9 +124,10 @@ export default function App() {
   }
 
   return (
-    <HashRouter>
-      <Routes>
-        <Route element={<AppLayout />}>
+    <>
+      <HashRouter>
+        <Routes>
+          <Route element={<AppLayout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/news" element={<News />} />
           <Route path="/portfolio" element={<Portfolio />} />
@@ -103,7 +140,25 @@ export default function App() {
           <Route path="/chat" element={<Chat />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
-      </Routes>
-    </HashRouter>
+        </Routes>
+      </HashRouter>
+      {lowBal && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-surface rounded-xl shadow-xl w-full max-w-sm p-5">
+            <div className="text-2xl mb-2">⚠️</div>
+            <h3 className="text-base font-bold text-primary-900 mb-1">AI 余额不足</h3>
+            <p className="text-sm text-text-secondary leading-6">
+              您的 DeepSeek API 余额已低于 ¥5（{Number(aiBal) > 0 ? '约 ¥' + Number(aiBal).toFixed(2) : ''}），AI 功能可能随时中断。
+              建议尽快充值，以免推荐与问答降级为规则模式。
+            </p>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={dismissLowBal}>今日不再提醒</Button>
+              <Button size="sm" onClick={openTopUp}>去充值</Button>
+            </div>
+            <p className="text-xs text-text-muted mt-2">充值地址：platform.deepseek.com/top_up（约 ¥10 可用数月）</p>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

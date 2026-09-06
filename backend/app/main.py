@@ -262,6 +262,16 @@ def ai_key_save(data: AiKeyIn, x_backend_token: str = Header(default="")):
     return result
 
 
+@app.get("/api/settings/ai-balance")
+def ai_balance_api(x_backend_token: str = Header(default="")):
+    """手动刷新并返回 DeepSeek 账户余额（人民币；Key 不出后端）"""
+    require_token(x_backend_token)
+    from .services.llm_client import fetch_and_cache_balance, ai_status
+    result = fetch_and_cache_balance()
+    result['status'] = ai_status()
+    return result
+
+
 @app.get("/api/settings/ai-status")
 def ai_status_api(x_backend_token: str = Header(default="")):
     """AI 连接状态（供设置页/推荐中心展示）：已配置/Key尾号/最近错误原因（不返回 Key 明文）"""
@@ -578,17 +588,48 @@ def recommend_today(x_backend_token: str = Header(default="")):
     return generate_recommendations(force=False)
 
 
+class RecommendScopeIn(BaseModel):
+    """推荐范围（V1.1.0）：type=market 全市场 / pool 我的股票池；groups=选中分组名（pool 时有效）"""
+    type: str = 'market'
+    groups: list[str] | None = None
+
+
 class RecommendRunIn(BaseModel):
-    """按用户意愿生成推荐（V1.0.9）：intent 如「酒类和科技股」；留空 = 全面分析"""
+    """生成推荐请求（V1.1.0）：
+    intent：用户意愿文本（如「酒类和科技股」），留空 = 不指定；
+    mode：both 全部 / short 仅短线 / long 仅长线；
+    scope：候选范围（全市场 或 我的股票池分组多选）"""
     intent: str = ''
+    mode: str = 'both'
+    scope: RecommendScopeIn | None = None
+
+
+class PoolAnalyzeIn(BaseModel):
+    groups: list[str] | None = None
+
+
+@app.post("/api/pool/analyze")
+def pool_analyze_api(data: PoolAnalyzeIn | None = None, x_backend_token: str = Header(default="")):
+    """我的股票池体检（V1.1.0 M1）：高低位/RSI/趋势/结论；groups 空=全部组"""
+    require_token(x_backend_token)
+    from .services.pool_service import analyze_pool
+    groups = [str(g).strip() for g in ((data.groups if data else None) or []) if str(g).strip()] or None
+    return analyze_pool(groups)
 
 
 @app.post("/api/recommend/run")
 def recommend_run(data: RecommendRunIn | None = None, x_backend_token: str = Header(default="")):
-    """手动触发重新生成当日推荐；可带 intent（用户想看的行业/类型）"""
+    """手动触发生成当日推荐（V1.1.0）：intent 意愿文本 / mode 短线长线 / scope 候选范围"""
     require_token(x_backend_token)
-    intent = (data.intent if data else '') or ''
-    return generate_recommendations(force=True, intent=intent)
+    d = data or RecommendRunIn()
+    scope = d.scope
+    return generate_recommendations(
+        force=True,
+        intent=(d.intent or '').strip(),
+        mode=(d.mode or 'both').strip() or 'both',
+        scope_type=(scope.type if scope else 'market'),
+        groups=(scope.groups if scope else None),
+    )
 
 
 @app.get("/api/recommend/history")
@@ -616,10 +657,17 @@ def recommend_backtest_evaluate(x_backend_token: str = Header(default="")):
 
 @app.post("/api/recommendations/generate")
 def recommendations_generate(data: RecommendRunIn | None = None, x_backend_token: str = Header(default="")):
-    """生成今日推荐（已生成返回 existing:true，不重复生成）；可带 intent"""
+    """生成今日推荐（已生成返回 existing:true，不重复生成）；可带 intent/mode/scope"""
     require_token(x_backend_token)
-    intent = (data.intent if data else '') or ''
-    result = generate_recommendations(force=False, intent=intent)
+    d = data or RecommendRunIn()
+    scope = d.scope
+    result = generate_recommendations(
+        force=False,
+        intent=(d.intent or '').strip(),
+        mode=(d.mode or 'both').strip() or 'both',
+        scope_type=(scope.type if scope else 'market'),
+        groups=(scope.groups if scope else None),
+    )
     result['existing'] = result.get('cached', False)
     return result
 

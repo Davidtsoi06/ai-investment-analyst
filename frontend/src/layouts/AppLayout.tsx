@@ -7,7 +7,7 @@ const navItems = [
   { path: '/portfolio', label: '持仓总览', icon: '💼' },
   { path: '/recommendation', label: '推荐中心', icon: '🎯' },
   { path: '/tracking', label: '追踪管理', icon: '📡' },
-  { path: '/watchlist', label: '自选股看板', icon: '⭐' },
+  { path: '/watchlist', label: '我的股票池', icon: '⭐' },
   { path: '/reports', label: '收盘报告', icon: '📋' },
   { path: '/risk', label: '风险分析', icon: '🛡️' },
   { path: '/review', label: '投资复盘', icon: '🔄' },

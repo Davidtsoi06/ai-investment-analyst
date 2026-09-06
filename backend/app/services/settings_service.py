@@ -101,3 +101,76 @@ def ai_key_tail() -> str:
     """Key 尾号（用于界面展示，如 sk-****abcd；未配置返回空）"""
     key = get_ai_key()
     return key[-4:] if key else ''
+# ---------------- V1.1.0 N1：AI 用量统计 与 余额缓存 ----------------
+
+USAGE_KEY = 'ai.usage.daily'
+BALANCE_KEY = 'ai_balance_cache'
+
+
+def record_usage(prompt_tokens: int = 0, completion_tokens: int = 0, calls: int = 1) -> None:
+    """本地按天记录 AI 调用用量（保留 7 天；结构对齐个人理财投资软件 ai.usage.daily）"""
+    from datetime import date, timedelta
+    today = date.today().isoformat()
+    raw = get_setting(USAGE_KEY)
+    try:
+        mapping = json.loads(raw) if isinstance(raw, str) and raw else (raw or {})
+        mapping = mapping if isinstance(mapping, dict) else {}
+    except (ValueError, TypeError):
+        mapping = {}
+    day = mapping.get(today) or {}
+    if not isinstance(day, dict):
+        day = {}
+    mapping[today] = {
+        'calls': int(day.get('calls', 0)) + calls,
+        'promptTokens': int(day.get('promptTokens', 0)) + int(prompt_tokens or 0),
+        'completionTokens': int(day.get('completionTokens', 0)) + int(completion_tokens or 0),
+    }
+    cutoff = (date.today() - timedelta(days=6)).isoformat()
+    for k in [k for k in mapping if k < cutoff]:
+        mapping.pop(k, None)
+    set_setting(USAGE_KEY, json.dumps(mapping, ensure_ascii=False))
+
+
+def get_usage_today() -> dict:
+    """今日用量 {calls, promptTokens, completionTokens}"""
+    from datetime import date
+    today = date.today().isoformat()
+    raw = get_setting(USAGE_KEY)
+    try:
+        mapping = json.loads(raw) if isinstance(raw, str) and raw else (raw or {})
+        mapping = mapping if isinstance(mapping, dict) else {}
+    except (ValueError, TypeError):
+        mapping = {}
+    day = mapping.get(today) or {}
+    return {
+        'calls': int(day.get('calls', 0)) if isinstance(day, dict) else 0,
+        'promptTokens': int(day.get('promptTokens', 0)) if isinstance(day, dict) else 0,
+        'completionTokens': int(day.get('completionTokens', 0)) if isinstance(day, dict) else 0,
+    }
+
+
+def set_balance_cache(balance: float, currency: str = 'CNY', fetched_at: str = '') -> None:
+    set_setting(BALANCE_KEY, json.dumps({
+        'balance': round(float(balance or 0), 4), 'currency': currency or 'CNY', 'fetched_at': fetched_at,
+        'low': float(balance or 0) <= 5.0,
+    }, ensure_ascii=False))
+
+
+def get_balance_cache() -> dict:
+    raw = get_setting(BALANCE_KEY)
+    try:
+        d = json.loads(raw) if isinstance(raw, str) and raw else (raw or {})
+        return d if isinstance(d, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def mark_balance_warned() -> None:
+    """记录当日已弹过低余额提醒（每日一次）"""
+    from datetime import date
+    set_setting('ai_balance_warned', date.today().isoformat())
+
+
+def balance_warned_today() -> bool:
+    from datetime import date
+    return get_setting('ai_balance_warned') == date.today().isoformat()

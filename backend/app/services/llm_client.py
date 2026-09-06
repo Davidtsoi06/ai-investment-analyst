@@ -72,17 +72,77 @@ def get_ai_last_error() -> dict:
 
 def ai_status() -> dict:
     """AI 连接状态（供设置页与推荐中心展示；绝不返回 Key 明文）：
-    {configured, key_tail, crypto_error, last_error, last_error_at}"""
+    {configured, key_tail, crypto_error, last_error, last_error_at, balance?, usage?}"""
     from .crypto_util import get_last_error
+    from .settings_service import get_balance_cache, get_usage_today, balance_warned_today
     key = get_ai_key()
     last = get_ai_last_error()
+    bc = get_balance_cache()
+    usage = get_usage_today()
     return {
         'configured': bool(key),
         'key_tail': (key[-4:] if key else ''),
         'crypto_error': get_last_error(),
         'last_error': last.get('error') or '',
         'last_error_at': last.get('at') or '',
+        'balance': bc.get('balance') if bc.get('fetched_at') else None,
+        'balance_currency': bc.get('currency', 'CNY') if bc.get('fetched_at') else None,
+        'balance_fetched_at': bc.get('fetched_at') or '',
+        'balance_low': bool(bc.get('low')) if bc.get('fetched_at') else False,
+        'balance_warned_today': balance_warned_today(),
+        'usage': usage,
     }
+
+
+def fetch_and_cache_balance() -> dict:
+    """立即查询 DeepSeek 余额并写缓存；失败保留旧缓存并返回错误。余额单位人民币元"""
+    from .settings_service import set_balance_cache
+    key = get_ai_key()
+    if not key:
+        return {'ok': False, 'error': '未配置 API Key'}
+    try:
+        r = requests.get(
+            settings.deepseek_base_url.rstrip('/') + '/user/balance',
+            headers={'Authorization': f'Bearer {key}'},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            msg = _http_error_message(r.status_code, r.text[:200])
+            return {'ok': False, 'error': msg}
+        data = r.json()
+        infos = data.get('balance_infos') or []
+        total = sum(float(i.get('total_balance') or 0) for i in infos)
+        currency = next((i.get('currency') for i in infos if i.get('currency')), 'CNY')
+        now = time.strftime('%Y-%m-%d %H:%M:%S')
+        set_balance_cache(total, currency, now)
+        return {'ok': True, 'balance': total, 'currency': currency, 'fetched_at': now}
+    except Exception as e:  # noqa: BLE001
+        return {'ok': False, 'error': f'网络请求失败：{str(e)[:150]}'}
+
+
+def maybe_refresh_balance_async() -> None:
+    """AI 调用成功后静默刷新余额（异步；≥10 分钟一次；失败静默）——决策 D1=B"""
+    try:
+        from .settings_service import get_balance_cache
+        bc = get_balance_cache()
+        last_at = bc.get('fetched_at') or ''
+        if last_at:
+            try:
+                from datetime import datetime
+                dt = datetime.strptime(last_at, '%Y-%m-%d %H:%M:%S')
+                if (time.time() - dt.timestamp()) < 600:
+                    return
+            except (ValueError, TypeError):
+                pass
+        def _run() -> None:
+            try:
+                fetch_and_cache_balance()
+            except Exception:  # noqa: BLE001
+                pass
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _http_error_message(status: int, body: str) -> str:
@@ -153,9 +213,18 @@ def chat(messages: list[dict], model: str | None = None, temperature: float = 0.
         raise RuntimeError(msg)
     _clear_ai_error()  # 调用成功：清除历史错误
     try:
-        content = r.json()['choices'][0]['message']['content']
+        body = r.json()
+        content = body['choices'][0]['message']['content']
     except Exception as e:  # noqa: BLE001
         msg = f'DeepSeek 返回解析失败：{str(e)[:150]}（原始内容: {r.text[:150]}）'
         _record_ai_error(msg)
         raise RuntimeError(msg) from e
+    # V1.1.0 N1：本地记录 tokens 用量 + 异步刷新余额缓存（低余额提示依据）
+    try:
+        usage = (body or {}).get('usage') or {}
+        from .settings_service import record_usage
+        record_usage(int(usage.get('prompt_tokens') or 0), int(usage.get('completion_tokens') or 0))
+        maybe_refresh_balance_async()
+    except Exception:  # noqa: BLE001
+        pass
     return content

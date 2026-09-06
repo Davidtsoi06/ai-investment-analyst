@@ -56,6 +56,30 @@ export const saveAiKey = (key: string) => api('POST', '/api/settings/ai-key', { 
 export const testAiKey = (key?: string) =>
   // 不带 Key 时不发送请求体：后端用"库内已保存 Key"测试（发送 {} 会触发必填校验 422）
   api<{ ok: boolean; models?: string[]; error?: string }>('POST', '/api/settings/ai-test', key ? { api_key: key } : undefined);
+/** 我的股票池体检（V1.1.0 M1） */
+export const analyzeStockPool = (groups?: string[]) =>
+  api<{ items?: PoolAnalyzeItem[]; errors?: string[]; count?: number }>('POST', '/api/pool/analyze', groups && groups.length ? { groups } : undefined);
+export interface PoolAnalyzeItem {
+  symbol: string;
+  name: string;
+  market: string;
+  group?: string;
+  price?: number;
+  change_pct?: number | null;
+  position?: 'high' | 'mid' | 'low';
+  position_label?: string;
+  pct?: number;
+  rsi?: number | null;
+  ma_bias?: number | null;
+  verdict?: string;
+  reason?: string;
+  pe?: number | null;
+  [k: string]: unknown;
+}
+/** 手动刷新 DeepSeek 余额（人民币） */
+export const getAiBalance = () =>
+  api<{ ok?: boolean; balance?: number; currency?: string; fetched_at?: string; error?: string }>('GET', '/api/settings/ai-balance');
+
 /** AI 连接状态：configured / Key 尾号 / 最近错误原因（V1.0.7 错误可见化） */
 export interface AiStatus {
   configured: boolean;
@@ -63,6 +87,13 @@ export interface AiStatus {
   crypto_error?: string;
   last_error?: string;
   last_error_at?: string;
+  /** V1.1.0 N1：余额（人民币）与今日用量 */
+  balance?: number | null;
+  balance_currency?: string;
+  balance_fetched_at?: string;
+  balance_low?: boolean;
+  usage?: { calls?: number; promptTokens?: number; completionTokens?: number };
+  [k: string]: unknown;
 }
 export const getAiStatus = () => api<AiStatus>('GET', '/api/settings/ai-status');
 // ---- 自选股看板（S9） ----
@@ -157,6 +188,9 @@ export interface RecommendItem {
   rec_date?: string;
   rec_price?: number | null;
   status?: string; // open ...
+  /** V1.1.0：rec=推荐级 / watch=观察清单（低置信度补充） */
+  tier?: string | null;
+  [k: string]: unknown;
 }
 
 export interface BlockedItem {
@@ -174,6 +208,10 @@ export interface TodayRecommendations {
   source?: 'ai' | 'ai_empty' | 'rules' | string;
   /** 本次分析的用户意愿（如「酒类和科技股」；空=全面分析） */
   intent?: string | null;
+  /** V1.1.0：本次生成类型 both/short/long 与范围说明 */
+  mode?: string;
+  scope?: string;
+  scope_desc?: string;
   items: RecommendItem[];
   blocked?: BlockedItem[];
   errors?: string[];
@@ -236,9 +274,13 @@ export interface EvaluateResult {
   skipped?: { id: number; symbol: string; reason: string }[];
 }
 
-/** 生成今日推荐：intent 为用户意愿文本（如「酒类和科技股」），留空 = 全面分析 */
-export const generateRecommendations = (intent = '') =>
-  api<TodayRecommendations>('POST', '/api/recommend/run', intent ? { intent } : undefined);
+/** 生成推荐（V1.1.0）：intent 意愿文本；mode all/short/long；scope {type:'market'|'pool', groups} */
+export const generateRecommendations = (opts?: { intent?: string; mode?: string; scope?: { type?: string; groups?: string[] } }) =>
+  api<TodayRecommendations>('POST', '/api/recommend/run', {
+    intent: opts?.intent || '',
+    mode: opts?.mode || 'both',
+    scope: opts?.scope ? { type: opts.scope.type || 'market', groups: opts.scope.groups || [] } : { type: 'market', groups: [] },
+  });
 export const getTodayRecommendations = () => api<TodayRecommendations>('GET', '/api/recommend/today');
 export const getRecommendationsHistory = (limit = 50) =>
   api<HistoryItem[]>('GET', `/api/recommend/history?limit=${limit}`);

@@ -8,6 +8,9 @@ import Loading from '../components/ui/Loading';
 import EmptyState from '../components/ui/EmptyState';
 import Stat from '../components/ui/Stat';
 import { fmtPct, fmtPrice, num, toList, upDownCls } from '../lib/format';
+import KLineChart from '../components/KLineChart';
+import { getKline } from '../services/api';
+import type { KlineBar } from '../services/api';
 import {
   evaluateRecommendations,
   generateRecommendations,
@@ -15,6 +18,7 @@ import {
   getRecommendationsHistory,
   getRecommendationsPerformance,
   getTodayRecommendations,
+  getWatchlist,
   parseApiError,
 } from '../services/api';
 import { Link } from 'react-router-dom';
@@ -62,9 +66,23 @@ function ConfBar({ value }: { value: number | null | undefined }) {
   );
 }
 
-/** 推荐卡片：短线展示入场区间/止损/目标，长线展示估值区间 */
+/** 推荐卡片：短线展示入场区间/止损/目标 + 可展开 K 线走势；长线展示估值区间 */
 function RecCard({ rec }: { rec: RecommendItem }) {
   const short = isShort(rec);
+  const [showK, setShowK] = useState(false);
+  const [kb, setKb] = useState<KlineBar[]>([]);
+  const [kLoading, setKLoading] = useState(false);
+
+  useEffect(() => {
+    if (!showK || kb.length > 0) return;
+    setKLoading(true);
+    getKline(rec.symbol, rec.market || 'A股', 60)
+      .then((r) => { if (r.ok) setKb(toList<KlineBar>(r.data)); })
+      .catch(() => { /* 静默 */ })
+      .finally(() => setKLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showK]);
+
   return (
     <div className="border border-border rounded-lg p-4 flex flex-col gap-2.5">
       <div className="flex items-center gap-2 flex-wrap">
@@ -72,6 +90,11 @@ function RecCard({ rec }: { rec: RecommendItem }) {
         <span className="text-xs text-text-muted font-number">{rec.symbol}</span>
         <Badge variant={rec.market === '港股' ? 'info' : 'default'}>{rec.market || 'A股'}</Badge>
         <Badge variant={short ? 'warning' : 'default'}>{REC_TYPE_LABEL[rec.rec_type] || rec.rec_type}</Badge>
+        {rec.tier === 'watch' && (
+          <span title="观察清单：AI/规则认为可关注但把握一般，供您自行研究参考，不构成正式推荐">
+            <Badge variant="default">观察级</Badge>
+          </span>
+        )}
       </div>
       <ConfBar value={rec.confidence} />
       {short ? (
@@ -100,6 +123,24 @@ function RecCard({ rec }: { rec: RecommendItem }) {
         </div>
       )}
       {rec.logic && <p className="text-xs text-text-secondary leading-relaxed line-clamp-3">{rec.logic}</p>}
+      <button
+        onClick={() => setShowK(!showK)}
+        className="text-xs text-primary-600 hover:text-primary-700 text-left self-start"
+      >
+        {showK ? '收起走势 ▲' : '📈 查看近期走势（60日K线）'}
+      </button>
+      {showK && (
+        <div className="rounded border border-border p-1.5">
+          {kLoading ? (
+            <div className="h-40 flex items-center justify-center text-xs text-text-muted">加载 K 线中...</div>
+          ) : kb.length > 0 ? (
+            <KLineChart bars={kb} height={170} />
+          ) : (
+            <div className="h-40 flex items-center justify-center text-xs text-text-muted">K 线数据暂不可用</div>
+          )}
+          <div className="text-[11px] text-text-muted mt-1">入场/止损/目标位：{fmtPrice(rec.entry_min ?? rec.valuation_min, rec.market)} ~ {fmtPrice(rec.entry_max ?? rec.valuation_max, rec.market)} · 止损 {fmtPrice(rec.stop_loss, rec.market)} · 目标 {fmtPrice(rec.target, rec.market)}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -121,9 +162,13 @@ export default function Recommendation() {
   const [evaluating, setEvaluating] = useState(false);
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
-  // V1.0.9：按意愿生成（弹出意图输入框）
+  // V1.1.0：生成配置弹窗（意愿文本 / 类型 / 候选范围）
   const [intentOpen, setIntentOpen] = useState(false);
   const [intentText, setIntentText] = useState('');
+  const [genMode, setGenMode] = useState<'both' | 'short' | 'long'>('both');
+  const [genScope, setGenScope] = useState<'market' | 'pool'>('market');
+  const [poolGroups, setPoolGroups] = useState<string[]>([]);
+  const [poolItems, setPoolItems] = useState<{ group_name?: string; symbol: string; name?: string }[]>([]);
 
   // AI 最近错误（V1.0.7：规则降级原因可见化，不再"莫名降级"）
   const [aiErr, setAiErr] = useState<{ last_error?: string; last_error_at?: string; configured?: boolean } | null>(null);
@@ -170,6 +215,9 @@ export default function Recommendation() {
     getAiStatus().then((r) => {
       if (r.ok && r.data) setAiErr(r.data as { last_error?: string; last_error_at?: string; configured?: boolean });
     }).catch(() => {});
+    getWatchlist().then((r) => {
+      if (r.ok && r.data) setPoolItems(toList<{ group_name?: string; symbol: string; name?: string }>(r.data));
+    }).catch(() => {});
   }, [loadToday, loadBacktest, loadHistory]);
 
   const items = useMemo<RecommendItem[]>(() => toList<RecommendItem>(today?.items), [today]);
@@ -189,19 +237,25 @@ export default function Recommendation() {
 
   const openIntent = () => {
     setIntentText('');
+    setGenMode('both');
+    setGenScope('market');
+    setPoolGroups([]);
     setIntentOpen(true);
   };
 
   const closeIntent = () => setIntentOpen(false);
 
-  const handleGenerate = async (intent = '') => {
+  /** 生成（V1.1.0）：intent 意愿 / mode 类型 / scope 范围 */
+  const handleGenerate = async (intent = '', mode: 'both' | 'short' | 'long' = 'both',
+                                scopeType: 'market' | 'pool' = 'market', groups: string[] = []) => {
     setIntentOpen(false);
     setGenerating(true);
     setMsg(null);
-    const r = await generateRecommendations(intent);
+    const r = await generateRecommendations({ intent, mode, scope: { type: scopeType, groups } });
     setGenerating(false);
     if (!r.ok) {
-      setMsg({ type: 'err', text: '生成失败：' + parseApiError(r.error) });
+      const d = r.data as { reason?: string } | undefined;
+      setMsg({ type: 'err', text: '生成失败：' + (d?.reason || parseApiError(r.error)) });
       return;
     }
     const d = r.data as TodayRecommendations | undefined;
@@ -209,10 +263,15 @@ export default function Recommendation() {
       const list = d.items;
       const sc = list.filter(isShort).length;
       const lc = list.length - sc;
-      const scope = intent.trim() ? '（范围：' + intent.trim() + '）' : '';
+      const parts: string[] = [];
+      if (intent.trim()) parts.push('范围：' + intent.trim());
+      if (d.scope_desc) parts.push(d.scope_desc);
+      if (mode === 'short') parts.push('仅短线');
+      if (mode === 'long') parts.push('仅长线');
       setMsg({
         type: 'ok',
-        text: (d.cached ? '已是最新（缓存）' : '已生成') + scope + '：短线 ' + sc + ' 条 · 长线 ' + lc + ' 条'
+        text: (d.cached ? '已是最新（缓存）' : '已生成') + (parts.length ? '（' + parts.join(' · ') + '）' : '')
+          + '：短线 ' + sc + ' 条 · 长线 ' + lc + ' 条'
           + (d.source === 'rules' ? '（规则引擎）' : d.source === 'ai_empty' ? '（AI 暂无合适标的）' : ''),
       });
     } else {
@@ -543,18 +602,68 @@ export default function Recommendation() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-1">
-              <h3 className="text-base font-bold text-primary-900">想要哪方面的推荐？</h3>
+              <h3 className="text-base font-bold text-primary-900">生成今日推荐</h3>
               <button onClick={closeIntent} className="text-text-muted hover:text-text px-2 text-lg leading-none">×</button>
             </div>
-            <p className="text-xs text-text-muted mb-3">
-              输入您想看的行业/类型，AI 会解析并按此范围分析候选股。不输入则全面分析。
-            </p>
+
+            {/* 类型：全部 / 仅短线 / 仅长线 */}
+            <div className="mb-3">
+              <div className="text-xs text-text-secondary mb-1.5">推荐类型</div>
+              <div className="flex flex-wrap gap-2">
+                {([['both', '全部（短线+长线）'], ['short', '🔴 仅短线'], ['long', '🔵 仅长线']] as const).map(([k, label]) => (
+                  <button key={k} onClick={() => setGenMode(k)}
+                    className={'px-3 py-1.5 rounded-lg border text-sm ' + (genMode === k ? 'border-primary-500 bg-primary-50 text-primary-700 font-medium' : 'border-border')}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 候选范围 */}
+            <div className="mb-3">
+              <div className="text-xs text-text-secondary mb-1.5">分析哪些股票？</div>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={() => setGenScope('market')}
+                  className={'px-3 py-1.5 rounded-lg border text-sm ' + (genScope === 'market' ? 'border-primary-500 bg-primary-50 text-primary-700 font-medium' : 'border-border')}>
+                  全市场自动选股
+                </button>
+                <button onClick={() => setGenScope('pool')}
+                  className={'px-3 py-1.5 rounded-lg border text-sm ' + (genScope === 'pool' ? 'border-primary-500 bg-primary-50 text-primary-700 font-medium' : 'border-border')}>
+                  📌 我的股票池
+                </button>
+              </div>
+              {genScope === 'pool' && (
+                <div className="rounded border border-border bg-bg-secondary/50 px-2.5 py-2 mt-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    {poolItems.length === 0 && <span className="text-xs text-text-muted">股票池暂无股票，请先到「我的股票池」添加观察股</span>}
+                    {Array.from(new Set((poolItems || []).map((i) => i.group_name || '默认'))).map((grp) => {
+                      const cnt = (poolItems || []).filter((i) => (i.group_name || '默认') === grp).length;
+                      const on = poolGroups.includes(grp);
+                      return (
+                        <button key={grp} onClick={() => setPoolGroups(on ? poolGroups.filter((g) => g !== grp) : [...poolGroups, grp])}
+                          className={'text-xs rounded-full px-2.5 py-1 border ' + (on ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-border text-text-secondary')}>
+                          {grp}（{cnt}）
+                        </button>
+                      );
+                    })}
+                    {poolItems.length > 0 && (
+                      <button onClick={() => setPoolGroups([])}
+                        className={'text-xs rounded-full px-2.5 py-1 border ' + (poolGroups.length === 0 ? 'border-primary-500 bg-primary-50 text-primary-700' : 'border-border text-text-secondary')}>
+                        全部组
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-xs text-text-muted mt-1.5">勾选要分析的表（组）；不勾选 = 全部组。池内不足 5 只时不自动补蓝筹，会提示先添加观察股。</p>
+                </div>
+              )}
+            </div>
+
+            <div className="text-xs text-text-secondary mb-1.5">还想限定行业/类型？（可选）</div>
             <textarea
               value={intentText}
               onChange={(e) => setIntentText(e.target.value)}
               rows={2}
-              autoFocus
-              placeholder="例如：酒类的股票以及科技股"
+              placeholder="例如：酒类的股票以及科技股（不填 = 所选范围内全面分析）"
               className="w-full rounded border border-border px-3 py-2 text-sm outline-none focus:border-primary-500 resize-none"
             />
             <div className="flex flex-wrap gap-1.5 mt-2">
@@ -569,11 +678,9 @@ export default function Recommendation() {
               ))}
             </div>
             <div className="mt-4 flex items-center justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={() => handleGenerate('')} disabled={generating}>
-                不指定（全面分析）
-              </Button>
-              <Button size="sm" onClick={() => handleGenerate(intentText.trim())} disabled={generating || !intentText.trim()}>
-                {generating ? '分析中（约 10~30 秒）...' : '按此范围分析'}
+              <Button variant="secondary" size="sm" onClick={closeIntent} disabled={generating}>取消</Button>
+              <Button size="sm" onClick={() => handleGenerate(intentText.trim(), genMode, genScope, poolGroups)} disabled={generating}>
+                {generating ? '分析中（约 10~60 秒）...' : '开始分析'}
               </Button>
             </div>
           </div>

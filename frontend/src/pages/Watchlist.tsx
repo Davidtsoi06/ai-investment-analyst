@@ -9,6 +9,7 @@ import Stat from '../components/ui/Stat';
 import KLineChart from '../components/KLineChart';
 import {
   addWatchlistItem,
+  analyzeStockPool,
   deleteWatchlistItem,
   getKline,
   getQuote,
@@ -17,7 +18,7 @@ import {
   parseApiError,
   updateWatchlistGroup,
 } from '../services/api';
-import type { KlineBar, Quote, RelatedNewsItem, WatchlistItem } from '../services/api';
+import type { KlineBar, PoolAnalyzeItem, Quote, RelatedNewsItem, WatchlistItem } from '../services/api';
 import { fmtBig, fmtNum, fmtVolume, toList, upDownCls } from '../lib/format';
 
 type Period = 'day' | 'week' | 'month';
@@ -250,18 +251,92 @@ export default function Watchlist() {
 
   const inputCls = 'h-10 rounded border border-border px-3 text-sm bg-white focus:outline-none focus:border-primary-500';
 
+  // V1.1.0：股票池体检（高低位/结论）
+  const [poolReport, setPoolReport] = useState<{ items: PoolAnalyzeItem[]; errors?: string[] } | null>(null);
+  const [poolRunning, setPoolRunning] = useState(false);
+
+  const runPoolAnalyze = async () => {
+    setPoolRunning(true);
+    const r = await analyzeStockPool();
+    setPoolRunning(false);
+    if (r.ok && r.data) {
+      setPoolReport({ items: (r.data.items as PoolAnalyzeItem[]) || [], errors: (r.data.errors as string[]) || [] });
+    } else {
+      setPoolReport({ items: [], errors: [parseApiError(r.error)] });
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-primary-900">自选股看板</h1>
-          <p className="text-xs text-text-muted mt-1">自定义分组 · 实时行情 · K线技术指标 · 基本面速览 · 关联资讯</p>
+          <h1 className="text-xl font-bold text-primary-900">我的股票池</h1>
+          <p className="text-xs text-text-muted mt-1">建立您自己的观察表（组），AI 推荐/资讯/体检都优先从这里出发 · 实时行情 · K线技术指标 · 基本面速览</p>
         </div>
+        <Button onClick={runPoolAnalyze} disabled={poolRunning}>
+          {poolRunning ? '分析中（约 10~30 秒）...' : (poolReport ? '重新体检' : '🔍 分析我的股票池')}
+        </Button>
       </div>
+
+      {/* V1.1.0 股票池体检结果 */}
+      {poolReport && (
+        <Card>
+          <div className="flex items-center gap-2 mb-2">
+            <h2 className="font-bold text-sm">股票池体检</h2>
+            <span className="text-xs text-text-muted">近 60 日区间位置 + RSI（&gt;70 高位警示 / &lt;30 低位警示）+ 均线 · 结论仅供参考</span>
+          </div>
+          {poolReport.items.length === 0 ? (
+            <p className="text-sm text-text-secondary">池内暂无股票，或行情获取失败。{poolReport.errors?.[0] || ''}</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-bg-secondary">
+                    <th className="px-3 py-1.5 text-left font-medium text-text-secondary">分组</th>
+                    <th className="px-3 py-1.5 text-left font-medium text-text-secondary">股票</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-text-secondary">现价</th>
+                    <th className="px-3 py-1.5 text-center font-medium text-text-secondary">今日</th>
+                    <th className="px-3 py-1.5 text-center font-medium text-text-secondary">位置</th>
+                    <th className="px-3 py-1.5 text-center font-medium text-text-secondary">RSI</th>
+                    <th className="px-3 py-1.5 text-left font-medium text-text-secondary">结论与理由</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {poolReport.items.map((it) => (
+                    <tr key={it.symbol + (it.market || '')} className="border-t border-border">
+                      <td className="px-3 py-1.5 text-xs text-text-secondary">{it.group || '默认'}</td>
+                      <td className="px-3 py-1.5">
+                        <span className="font-medium">{it.name}</span>
+                        <span className="text-xs text-text-muted font-number ml-1.5">{it.symbol}</span>
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-number">{it.price != null ? fmtNum(it.price, it.market === '港股' ? 3 : 2) : '—'}</td>
+                      <td className={'px-3 py-1.5 text-right font-number ' + upDownCls(it.change_pct != null ? Number(it.change_pct) : null)}>
+                        {it.change_pct != null ? (Number(it.change_pct) > 0 ? '+' : '') + Number(it.change_pct).toFixed(2) + '%' : '—'}
+                      </td>
+                      <td className="px-3 py-1.5 text-center">
+                        {it.position === 'high' && <Badge variant="danger">{it.position_label || '高位'}</Badge>}
+                        {it.position === 'mid' && <Badge variant="info">{it.position_label || '中位'}</Badge>}
+                        {it.position === 'low' && <Badge variant="success">{it.position_label || '低位'}</Badge>}
+                      </td>
+                      <td className="px-3 py-1.5 text-center font-number">{it.rsi != null ? Number(it.rsi).toFixed(1) : '—'}</td>
+                      <td className="px-3 py-1.5">
+                        <span className={'font-medium ' + (it.verdict === '值得关注' ? 'text-success' : it.verdict === '回避追高' ? 'text-danger' : 'text-text-secondary')}>
+                          {it.verdict || '—'}
+                        </span>
+                        <span className="text-xs text-text-muted ml-1.5">{it.reason || ''}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* 添加自选股 */}
       <Card>
-        <h2 className="font-bold text-sm mb-3">添加自选股</h2>
+        <h2 className="font-bold text-sm mb-3">添加观察股（可建多个表：A股表 / 港股表…）</h2>
         <div className="flex flex-wrap items-center gap-2">
           <input
             value={form.symbol}
