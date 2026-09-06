@@ -559,13 +559,6 @@ def watchlist_get(x_backend_token: str = Header(default="")):
     return _wl_list()
 
 
-@app.get("/api/watchlist/groups")
-def watchlist_groups(x_backend_token: str = Header(default="")):
-    """自选股分组名列表（前端 tab 用）"""
-    require_token(x_backend_token)
-    return _wl_groups()
-
-
 @app.post("/api/watchlist")
 def watchlist_post(data: WatchlistIn, x_backend_token: str = Header(default="")):
     """添加自选股（symbol 重复拒绝 409；name 为空自动查行情补全）"""
@@ -656,6 +649,64 @@ class RecommendRunIn(BaseModel):
 
 class PoolAnalyzeIn(BaseModel):
     groups: list[str] | None = None
+
+
+# ---------------- V1.1.3 我的股票池：表管理 + 股票搜索 ----------------
+
+from .services.groups_service import (  # noqa: E402
+    list_groups as _groups_list,
+    create_group as _groups_create,
+    update_group as _groups_update,
+    delete_group as _groups_delete,
+)
+
+
+class GroupIn(BaseModel):
+    name: str = ''
+    market: str = ''
+    note: str = ''
+
+
+class GroupUpdateIn(BaseModel):
+    name: str | None = None
+    market: str | None = None
+    note: str | None = None
+
+
+@app.get("/api/watchlist/groups")
+def watch_groups_list(x_backend_token: str = Header(default="")):
+    """我的股票池表列表（含数量；旧分组自动补齐元数据）"""
+    require_token(x_backend_token)
+    return _groups_list()
+
+
+@app.post("/api/watchlist/groups")
+def watch_groups_create(data: GroupIn, x_backend_token: str = Header(default="")):
+    """新建表（空表）：name 必填；market 可选（''=不限，可混合市场）"""
+    require_token(x_backend_token)
+    return _groups_create(data.name, data.market or '', data.note or '')
+
+
+@app.put("/api/watchlist/groups/{name}")
+def watch_groups_update(name: str, data: GroupUpdateIn, x_backend_token: str = Header(default="")):
+    """更新表：改名（同步组内股票）/改市场范围/改备注"""
+    require_token(x_backend_token)
+    return _groups_update(name, data.name, data.market, data.note)
+
+
+@app.delete("/api/watchlist/groups/{name}")
+def watch_groups_delete(name: str, x_backend_token: str = Header(default="")):
+    """删除表（连同表内股票）"""
+    require_token(x_backend_token)
+    return _groups_delete(name)
+
+
+@app.get("/api/stock/search")
+def stock_search_api(kw: str = Query(..., min_length=1), x_backend_token: str = Header(default="")):
+    """股票搜索：代码 / 中文名称 / 拼音（如 bd=百度）；候选附现价"""
+    require_token(x_backend_token)
+    from .services.stock_search_service import search_stock, with_price  # noqa: E402
+    return with_price(search_stock(kw))
 
 
 @app.post("/api/pool/analyze")

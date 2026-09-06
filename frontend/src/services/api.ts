@@ -108,6 +108,23 @@ export interface WatchlistItem {
   updated_at?: string;
 }
 export const getWatchlist = () => api<WatchlistItem[]>('GET', '/api/watchlist');
+// V1.1.3 表（组）管理与股票搜索
+export interface WatchGroup {
+  name: string;
+  market?: string;
+  note?: string;
+  count?: number;
+  sort_order?: number;
+}
+export const getWatchGroups = () => api<WatchGroup[]>('GET', '/api/watchlist/groups');
+export const createWatchGroup = (g: { name: string; market?: string; note?: string }) =>
+  api<{ ok?: boolean; group?: WatchGroup; reason?: string }>('POST', '/api/watchlist/groups', g);
+export const updateWatchGroup = (oldName: string, g: { name?: string; market?: string; note?: string }) =>
+  api<{ ok?: boolean; reason?: string }>('PUT', '/api/watchlist/groups/' + encodeURIComponent(oldName), g);
+export const deleteWatchGroup = (name: string) =>
+  api<{ ok?: boolean; deleted?: number }>('DELETE', '/api/watchlist/groups/' + encodeURIComponent(name));
+export const searchStock = (kw: string) =>
+  api<{ symbol: string; name: string; market: string; price?: number | null }[]>('GET', '/api/stock/search?kw=' + encodeURIComponent(kw));
 export const addWatchlistItem = (item: { symbol: string; market: string; group_name: string }) =>
   api<WatchlistItem>('POST', '/api/watchlist', item);
 export const updateWatchlistGroup = (id: number, group_name: string) =>

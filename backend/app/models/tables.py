@@ -4,7 +4,7 @@
 SCHEMA_VERSION 递增并同步补充 MIGRATIONS：旧库通过 ALTER 增列/建索引平滑升级。
 """
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 TABLES_DDL = [
     # 1. 用户画像（引导问卷结果，可随时修改）
@@ -232,6 +232,10 @@ TABLES_DDL = [
 
 # 版本化迁移：{版本: 步骤列表}。步骤必须幂等（增列前先查列存在性，建索引用 IF NOT EXISTS）。
 MIGRATIONS: dict[int, list[dict]] = {
+    12: [
+        # V1.1.3 我的股票池：表（组）作为独立实体——名称/市场范围/备注
+        {'kind': 'sql', 'ddl': "CREATE TABLE IF NOT EXISTS watch_groups (name TEXT PRIMARY KEY, market TEXT DEFAULT '', note TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"},
+    ],
     11: [
         # V1.1.1 N2/N3：资讯打标（region 地区 / related_stocks 命中股票 JSON 列表）
         {'kind': 'add_column', 'table': 'news_cache', 'column': 'region', 'ddl': "ALTER TABLE news_cache ADD COLUMN region TEXT"},

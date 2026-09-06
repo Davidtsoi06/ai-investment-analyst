@@ -101,7 +101,7 @@ def _translate_batch(items: list[dict]) -> None:
 
 
 def _save_items(items: list[dict], source_name: str, region: str) -> int:
-    """去重入库（content_hash）；中文展示字段：title_zh/title；desc_zh/desc"""
+    """去重入库（content_hash）并提交事务（v1.1.3 修复：此前漏 commit 导致全部回滚丢失）"""
     conn = get_connection()
     saved = 0
     try:
@@ -121,6 +121,10 @@ def _save_items(items: list[dict], source_name: str, region: str) -> int:
             )
             if cur.rowcount > 0:
                 saved += 1
+        conn.commit()  # 关键：提交事务，否则数据被回滚
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
     return saved

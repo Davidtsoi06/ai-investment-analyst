@@ -75,8 +75,18 @@ def analyze_pool(groups: list[str] | None = None) -> dict:
 
     items: list[dict] = []
     errors: list[str] = []
+    # 组市场范围：限定市场的表只分析该市场股票（v1.1.3）
+    c2 = get_connection()
+    try:
+        gm = {r['name']: r['market'] for r in c2.execute('SELECT name, market FROM watch_groups')}
+    finally:
+        c2.close()
     for r in rows:
         d = dict(r)
+        gmarket = gm.get(d['group_name'] or '', '')
+        if gmarket and d['market'] != gmarket:
+            errors.append(f"{d['name'] or d['symbol']}：表「{d['group_name']}」限 {gmarket}，已跳过（可在管理表中调整范围）")
+            continue
         try:
             q = data_fusion.get_quote(d['symbol'], d['market'])
             if q is None:

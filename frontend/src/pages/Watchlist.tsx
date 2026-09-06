@@ -1,550 +1,361 @@
-// S9 自选股看板：分组管理 / 实时行情 / 基本面速览 / ECharts K 线（MA+RSI）/ 关联资讯
+// V1.1.3 我的股票池：表（组）= 一等实体——全部视图(分区)/单表视图(过滤) · 建空表/管理表 · 搜索式添加 · 池体检
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Loading from '../components/ui/Loading';
 import EmptyState from '../components/ui/EmptyState';
-import Stat from '../components/ui/Stat';
 import KLineChart from '../components/KLineChart';
 import {
   addWatchlistItem,
   analyzeStockPool,
+  createWatchGroup,
+  deleteWatchGroup,
   deleteWatchlistItem,
   getKline,
   getQuote,
   getRelatedNews,
+  getWatchGroups,
   getWatchlist,
   parseApiError,
+  searchStock,
+  updateWatchGroup,
   updateWatchlistGroup,
 } from '../services/api';
-import type { KlineBar, PoolAnalyzeItem, Quote, RelatedNewsItem, WatchlistItem } from '../services/api';
-import { fmtBig, fmtNum, fmtVolume, toList, upDownCls } from '../lib/format';
+import type { KlineBar, PoolAnalyzeItem, Quote, RelatedNewsItem, WatchGroup, WatchlistItem } from '../services/api';
+import { fmtNum, toList, upDownCls } from '../lib/format';
 
-type Period = 'day' | 'week' | 'month';
-
-const PERIODS: Record<Period, { label: string; days: number }> = {
-  day: { label: '日K', days: 120 },
-  week: { label: '周K', days: 240 },
-  month: { label: '月K', days: 500 },
-};
-
-const LEVEL_BADGE: Record<string, 'danger' | 'warning' | 'default'> = {
-  '重大': 'danger',
-  '中等': 'warning',
-  '一般': 'default',
-};
-
-/** 日K按周/月聚合（周K：ISO 周；月K：自然月） */
-function aggregateBars(bars: KlineBar[], unit: 'week' | 'month'): KlineBar[] {
-  const map = new Map<string, KlineBar>();
-  for (const b of bars) {
-    const d = new Date(b.date + 'T00:00:00');
-    if (Number.isNaN(d.getTime())) continue;
-    let key: string;
-    if (unit === 'month') {
-      key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-    } else {
-      const day = d.getDay() || 7; // 周一=1 ... 周日=7
-      const thu = new Date(d);
-      thu.setDate(d.getDate() + 4 - day);
-      const yearStart = new Date(thu.getFullYear(), 0, 1);
-      const week = Math.ceil(((thu.getTime() - yearStart.getTime()) / 86400000 + yearStart.getDay() + 1) / 7);
-      key = thu.getFullYear() + '-W' + String(week).padStart(2, '0');
-    }
-    const prev = map.get(key);
-    if (!prev) {
-      map.set(key, { ...b, date: key });
-    } else {
-      prev.close = b.close;
-      prev.high = Math.max(prev.high, b.high);
-      prev.low = Math.min(prev.low, b.low);
-      prev.volume += b.volume;
-      prev.amount += b.amount;
-    }
-  }
-  return [...map.values()];
-}
+const MARKET_LABEL: Record<string, string> = { A股: '限A股', 港股: '限港股', '': '不限市场' };
 
 export default function Watchlist() {
+  const [groups, setGroups] = useState<WatchGroup[]>([]);
   const [items, setItems] = useState<WatchlistItem[]>([]);
-  const [loadingList, setLoadingList] = useState(false);
-  const [activeGroup, setActiveGroup] = useState('全部');
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [form, setForm] = useState({ symbol: '', market: 'A股', group: '默认' });
-  const [submitting, setSubmitting] = useState(false);
+  const [active, setActive] = useState<string>('__all__'); // '__all__'=全部视图，否则表名
+  const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
-  const [quote, setQuote] = useState<Quote | null>(null);
-  const [quoteLoading, setQuoteLoading] = useState(false);
-  const [quoteError, setQuoteError] = useState('');
-  const [klineBars, setKlineBars] = useState<KlineBar[]>([]);
-  const [klineLoading, setKlineLoading] = useState(false);
-  const [klineError, setKlineError] = useState('');
-  const [period, setPeriod] = useState<Period>('day');
-  const [news, setNews] = useState<RelatedNewsItem[]>([]);
-  const [newsLoading, setNewsLoading] = useState(false);
-  const [newsError, setNewsError] = useState('');
+  // 添加：搜索框 + 候选
+  const [kw, setKw] = useState('');
+  const [cands, setCands] = useState<{ symbol: string; name: string; market: string; price?: number | null }[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [picked, setPicked] = useState<{ symbol: string; name: string; market: string } | null>(null);
+  const [addGroup, setAddGroup] = useState('');
+  const searchSeq = useRef(0);
 
-  const quoteSeq = useRef(0);
-  const klineSeq = useRef(0);
-  const newsSeq = useRef(0);
+  // 建表/管理对话框
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: '', market: '', note: '' });
+  const [manageTarget, setManageTarget] = useState<WatchGroup | null>(null);
+  const [manageForm, setManageForm] = useState({ name: '', market: '', note: '' });
 
-  const groupNames = useMemo(() => {
-    const set = new Set<string>();
-    for (const it of items) set.add(it.group_name || '默认');
-    const arr = [...set];
-    const idx = arr.indexOf('默认');
-    if (idx > 0) {
-      arr.splice(idx, 1);
-      arr.unshift('默认');
-    }
-    return arr;
-  }, [items]);
-
-  const tabs = useMemo(() => {
-    const all = { name: '全部', count: items.length };
-    const rest = groupNames.map((g) => ({ name: g, count: items.filter((i) => (i.group_name || '默认') === g).length }));
-    return [all, ...rest];
-  }, [items, groupNames]);
-
-  const groupItems = useMemo(() => {
-    if (activeGroup === '全部') return items;
-    return items.filter((i) => (i.group_name || '默认') === activeGroup);
-  }, [items, activeGroup]);
-
-  const selected = useMemo(() => items.find((i) => i.id === selectedId) ?? null, [items, selectedId]);
-
-  const loadWatchlist = useCallback(async () => {
-    setLoadingList(true);
-    const r = await getWatchlist();
-    setLoadingList(false);
-    if (!r.ok) {
-      setMsg({ type: 'err', text: '自选股列表获取失败：' + parseApiError(r.error) });
-      return;
-    }
-    const list = toList<WatchlistItem>(r.data);
-    setItems(list);
-    setSelectedId((prev) => {
-      if (prev !== null && list.some((i) => i.id === prev)) return prev;
-      return list.length > 0 ? list[0].id : null;
-    });
-  }, []);
-
-  useEffect(() => {
-    loadWatchlist();
-  }, [loadWatchlist]);
-
-  const loadQuote = useCallback(async (item: WatchlistItem) => {
-    const seq = ++quoteSeq.current;
-    setQuoteLoading(true);
-    setQuoteError('');
-    const r = await getQuote(item.symbol, item.market || 'A股');
-    if (seq !== quoteSeq.current) return;
-    setQuoteLoading(false);
-    if (r.ok && r.data) setQuote(r.data);
-    else setQuoteError('行情获取失败：' + parseApiError(r.error, '后端或数据源不可用'));
-  }, []);
-
-  const loadKline = useCallback(async (item: WatchlistItem, p: Period) => {
-    const seq = ++klineSeq.current;
-    setKlineLoading(true);
-    setKlineError('');
-    const r = await getKline(item.symbol, item.market || 'A股', PERIODS[p].days);
-    if (seq !== klineSeq.current) return;
-    setKlineLoading(false);
-    if (r.ok && r.data && Array.isArray(r.data.bars)) setKlineBars(r.data.bars);
-    else setKlineError('K线获取失败：' + parseApiError(r.error, '后端或数据源不可用'));
-  }, []);
-
-  const loadNews = useCallback(async (item: WatchlistItem) => {
-    const seq = ++newsSeq.current;
-    setNewsLoading(true);
-    setNewsError('');
-    const r = await getRelatedNews(item.name || item.symbol);
-    if (seq !== newsSeq.current) return;
-    setNewsLoading(false);
-    if (r.ok) setNews(toList<RelatedNewsItem>(r.data));
-    else setNewsError('关联资讯获取失败：' + parseApiError(r.error, '后端或数据源不可用'));
-  }, []);
-
-  // 选中变化：清空并加载行情 / 资讯；K 线由下方 [selected, period] 效应负责
-  useEffect(() => {
-    if (!selected) {
-      setQuote(null);
-      setQuoteError('');
-      setKlineBars([]);
-      setKlineError('');
-      setNews([]);
-      setNewsError('');
-      return;
-    }
-    setQuote(null);
-    setQuoteError('');
-    setKlineBars([]);
-    setKlineError('');
-    setNews([]);
-    setNewsError('');
-    loadQuote(selected);
-    loadNews(selected);
-  }, [selected, loadQuote, loadNews]);
-
-  useEffect(() => {
-    if (selected) loadKline(selected, period);
-  }, [selected, period, loadKline]);
-
-  // 行情轻量轮询（30 秒；后台标签页暂停）
-  useEffect(() => {
-    if (!selected) return;
-    const t = window.setInterval(() => {
-      if (!document.hidden) loadQuote(selected);
-    }, 30000);
-    return () => window.clearInterval(t);
-  }, [selected, loadQuote]);
-
-  const displayBars = useMemo(() => {
-    if (period === 'day') return klineBars;
-    return aggregateBars(klineBars, period === 'week' ? 'week' : 'month');
-  }, [klineBars, period]);
-
-  const handleAdd = async () => {
-    const symbol = form.symbol.trim();
-    if (!symbol) return;
-    setSubmitting(true);
-    setMsg(null);
-    const r = await addWatchlistItem({ symbol, market: form.market, group_name: form.group.trim() || '默认' });
-    setSubmitting(false);
-    if (!r.ok) {
-      setMsg({ type: 'err', text: '添加失败：' + parseApiError(r.error) });
-      return;
-    }
-    setForm((f) => ({ ...f, symbol: '' }));
-    setMsg({ type: 'ok', text: '已添加 ' + symbol });
-    await loadWatchlist();
-    const created = r.data as WatchlistItem | undefined;
-    if (created && typeof created.id === 'number') setSelectedId(created.id);
-    window.setTimeout(() => setMsg(null), 3000);
-  };
-
-  const handleDelete = async (item: WatchlistItem) => {
-    if (!window.confirm('确定从自选股中删除 ' + (item.name || item.symbol) + ' ？')) return;
-    const r = await deleteWatchlistItem(item.id);
-    if (r.ok) {
-      await loadWatchlist();
-      setMsg({ type: 'ok', text: '已删除 ' + (item.name || item.symbol) });
-    } else {
-      setMsg({ type: 'err', text: '删除失败：' + parseApiError(r.error) });
-    }
-    window.setTimeout(() => setMsg(null), 2500);
-  };
-
-  const handleMoveGroup = async (item: WatchlistItem, group: string) => {
-    const r = await updateWatchlistGroup(item.id, group);
-    if (r.ok) {
-      await loadWatchlist();
-      setMsg({ type: 'ok', text: '已移至「' + group + '」' });
-    } else {
-      setMsg({ type: 'err', text: '改分组失败：' + parseApiError(r.error) });
-    }
-    window.setTimeout(() => setMsg(null), 2500);
-  };
-
-  const inputCls = 'h-10 rounded border border-border px-3 text-sm bg-white focus:outline-none focus:border-primary-500';
-
-  // V1.1.0：股票池体检（高低位/结论）
+  // 体检
   const [poolReport, setPoolReport] = useState<{ items: PoolAnalyzeItem[]; errors?: string[] } | null>(null);
   const [poolRunning, setPoolRunning] = useState(false);
+
+  // 单只详情（走势）
+  const [detail, setDetail] = useState<WatchlistItem | null>(null);
+  const [klineBars, setKlineBars] = useState<KlineBar[]>([]);
+  const [klineLoading, setKlineLoading] = useState(false);
+  const [quote, setQuote] = useState<Quote | null>(null);
+  const [relatedNews, setRelatedNews] = useState<RelatedNewsItem[]>([]);
+  const detailSeq = useRef(0);
+
+  const flash = (text: string, type: 'ok' | 'err' = 'ok') => { setMsg({ type, text }); window.setTimeout(() => setMsg(null), 4000); };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [g, w] = await Promise.all([getWatchGroups(), getWatchlist()]);
+    setLoading(false);
+    if (g.ok) setGroups(toList<WatchGroup>(g.data));
+    if (w.ok) setItems(toList<WatchlistItem>(w.data));
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  // 搜索候选（代码/名称/拼音 ≥2 字符）
+  useEffect(() => {
+    const q = kw.trim();
+    if (q.length < 2) { setCands([]); return; }
+    const seq = ++searchSeq.current;
+    setSearching(true);
+    searchStock(q).then((r) => { if (seq === searchSeq.current) setCands(r.ok ? (r.data || []) : []); }).catch(() => {}).finally(() => { if (seq === searchSeq.current) setSearching(false); });
+  }, [kw]);
+
+  const pick = (c: { symbol: string; name: string; market: string }) => { setPicked(c); setKw(c.name + '（' + c.symbol + '）'); setCands([]); };
+
+  const addToPool = async () => {
+    if (!picked) return;
+    const targetGroup = active === '__all__' ? (addGroup.trim() || '默认') : active;
+    const r = await addWatchlistItem({ symbol: picked.symbol, market: picked.market, group_name: targetGroup });
+    if (!r.ok) { flash('添加失败：' + parseApiError(r.error), 'err'); return; }
+    flash('已加入「' + targetGroup + '」');
+    setPicked(null); setKw(''); setAddGroup('');
+    await load();
+  };
 
   const runPoolAnalyze = async () => {
     setPoolRunning(true);
     const r = await analyzeStockPool();
     setPoolRunning(false);
-    if (r.ok && r.data) {
-      setPoolReport({ items: (r.data.items as PoolAnalyzeItem[]) || [], errors: (r.data.errors as string[]) || [] });
-    } else {
-      setPoolReport({ items: [], errors: [parseApiError(r.error)] });
-    }
+    if (r.ok && r.data) setPoolReport({ items: (r.data.items as PoolAnalyzeItem[]) || [], errors: (r.data.errors as string[]) || [] });
+    else setPoolReport({ items: [], errors: [parseApiError(r.error)] });
+  };
+
+  const saveGroup = async () => {
+    const name = createForm.name.trim();
+    if (!name) { flash('请输入表名', 'err'); return; }
+    const r = await createWatchGroup({ name, market: createForm.market, note: createForm.note });
+    setCreateOpen(false); setCreateForm({ name: '', market: '', note: '' });
+    if (!r.ok || (r.data as { ok?: boolean })?.ok === false) { flash('建表失败：' + (((r.data as { reason?: string })?.reason) || parseApiError(r.error)), 'err'); return; }
+    flash('已创建空表「' + name + '」');
+    await load(); setActive(name);
+  };
+
+  const saveManage = async () => {
+    if (!manageTarget) return;
+    const r = await updateWatchGroup(manageTarget.name, { name: manageForm.name.trim() || undefined, market: manageForm.market, note: manageForm.note });
+    setManageTarget(null);
+    if (!r.ok || (r.data as { ok?: boolean })?.ok === false) { flash('保存失败：' + (((r.data as { reason?: string })?.reason) || parseApiError(r.error)), 'err'); return; }
+    flash('表已更新');
+    await load();
+  };
+
+  const removeGroup = async (g: WatchGroup) => {
+    if (!window.confirm('删除表「' + g.name + '」及其中的 ' + (g.count ?? 0) + ' 只股票？')) return;
+    const r = await deleteWatchGroup(g.name);
+    setManageTarget(null);
+    if (!r.ok) { flash('删除失败：' + parseApiError(r.error), 'err'); return; }
+    flash('已删除表「' + g.name + '」');
+    await load();
+    if (active === g.name) setActive('__all__');
+  };
+
+  const moveItem = async (it: WatchlistItem, group: string) => {
+    const r = await updateWatchlistGroup(it.id, group);
+    if (r.ok) flash('已移至「' + group + '」'); else flash('移动失败：' + parseApiError(r.error), 'err');
+    await load();
+  };
+
+  const removeItem = async (it: WatchlistItem) => {
+    if (!window.confirm('从池中删除 ' + (it.name || it.symbol) + '？')) return;
+    const r = await deleteWatchlistItem(it.id);
+    if (r.ok) flash('已删除'); else flash('删除失败：' + parseApiError(r.error), 'err');
+    await load();
+  };
+
+  const showDetail = async (it: WatchlistItem) => {
+    setDetail(it); setKlineBars([]); setRelatedNews([]);
+    const seq = ++detailSeq.current;
+    setKlineLoading(true);
+    const [k, q, n] = await Promise.all([getKline(it.symbol, it.market || 'A股', 120), getQuote(it.symbol, it.market || 'A股'), getRelatedNews(it.name || it.symbol)]);
+    if (seq !== detailSeq.current) return;
+    setKlineLoading(false);
+    if (k.ok) setKlineBars(toList<KlineBar>(k.data));
+    if (q.ok && q.data) setQuote(q.data as Quote);
+    if (n.ok) setRelatedNews(toList<RelatedNewsItem>(n.data));
+  };
+
+  // 分组视图数据
+  const groupItems = useMemo(() => {
+    if (active === '__all__') return null;
+    return items.filter((i) => (i.group_name || '默认') === active);
+  }, [active, items]);
+  const activeGroupMeta = useMemo(() => groups.find((g) => g.name === active), [groups, active]);
+
+  const renderRow = (it: WatchlistItem) => {
+    const market = it.market || 'A股';
+    return (
+      <div key={it.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2 border-t border-border first:border-t-0">
+        <button onClick={() => void showDetail(it)} className="text-left">
+          <span className="font-medium text-sm hover:text-primary-600">{it.name || it.symbol}</span>
+          <span className="text-xs text-text-muted font-number ml-2">{it.symbol}</span>
+        </button>
+        <Badge variant={market === '港股' ? 'info' : 'default'}>{market}</Badge>
+        <span className="text-xs text-text-muted ml-auto flex items-center gap-2">
+          <button className="text-primary-600 hover:text-primary-700" onClick={() => void showDetail(it)}>走势</button>
+          {active !== '__all__' && groups.length > 1 && (
+            <select value="" onChange={(e) => { if (e.target.value) void moveItem(it, e.target.value); }} className="text-xs border border-border rounded px-1 py-0.5 bg-white">
+              <option value="">移至…</option>
+              {groups.filter((g) => g.name !== active).map((g) => <option key={g.name} value={g.name}>{g.name}</option>)}
+            </select>
+          )}
+          <button className="text-danger hover:opacity-70" onClick={() => void removeItem(it)}>删除</button>
+        </span>
+      </div>
+    );
   };
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-primary-900">我的股票池</h1>
-          <p className="text-xs text-text-muted mt-1">建立您自己的观察表（组），AI 推荐/资讯/体检都优先从这里出发 · 实时行情 · K线技术指标 · 基本面速览</p>
+          <p className="text-xs text-text-muted mt-1">先建表（A股表/港股表…）再往里放股票；AI 推荐/资讯/体检都从这里出发。</p>
         </div>
-        <Button onClick={runPoolAnalyze} disabled={poolRunning}>
-          {poolRunning ? '分析中（约 10~30 秒）...' : (poolReport ? '重新体检' : '🔍 分析我的股票池')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={() => void load()} disabled={loading}>刷新</Button>
+          <Button size="sm" onClick={runPoolAnalyze} disabled={poolRunning}>{poolRunning ? '分析中...' : (poolReport ? '重新体检' : '🔍 分析我的股票池')}</Button>
+        </div>
+      </div>
+      {msg && <p className={"text-sm " + (msg.type === 'ok' ? 'text-success' : 'text-danger')}>{msg.text}</p>}
+
+      {/* Tab：全部 + 各表 + 新建表 */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <button onClick={() => setActive('__all__')} className={"px-3 py-1.5 rounded-lg border text-sm " + (active === '__all__' ? 'border-primary-500 bg-primary-50 text-primary-700 font-medium' : 'border-border hover:border-primary-300')}>全部（{items.length}）</button>
+        {groups.map((g) => (
+          <button key={g.name} onClick={() => setActive(g.name)} className={"px-3 py-1.5 rounded-lg border text-sm " + (active === g.name ? 'border-primary-500 bg-primary-50 text-primary-700 font-medium' : 'border-border hover:border-primary-300')}>
+            {g.name}{g.market ? ' · ' + MARKET_LABEL[g.market] : ''}（{g.count ?? 0}）
+          </button>
+        ))}
+        <button onClick={() => { setCreateForm({ name: '', market: '', note: '' }); setCreateOpen(true); }} title="新建空表" className="px-2.5 py-1.5 rounded-lg border border-dashed border-primary-300 text-primary-600 text-lg leading-none hover:bg-primary-50">＋</button>
       </div>
 
-      {/* V1.1.0 股票池体检结果 */}
+      {/* 体检结果 */}
       {poolReport && (
         <Card>
           <div className="flex items-center gap-2 mb-2">
             <h2 className="font-bold text-sm">股票池体检</h2>
-            <span className="text-xs text-text-muted">近 60 日区间位置 + RSI（&gt;70 高位警示 / &lt;30 低位警示）+ 均线 · 结论仅供参考</span>
+            <span className="text-xs text-text-muted">60 日区间位置 + RSI + 均线 · 仅供参考</span>
+            {(poolReport.errors || []).length > 0 && <span className="text-xs text-warning ml-auto">⚠ {(poolReport.errors || []).length} 条跳过</span>}
           </div>
-          {poolReport.items.length === 0 ? (
-            <p className="text-sm text-text-secondary">池内暂无股票，或行情获取失败。{poolReport.errors?.[0] || ''}</p>
+          {poolReport.items.length === 0 && (poolReport.errors || []).length === 0 ? (
+            <p className="text-sm text-text-secondary">池内暂无股票，请先添加。</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-bg-secondary">
-                    <th className="px-3 py-1.5 text-left font-medium text-text-secondary">分组</th>
-                    <th className="px-3 py-1.5 text-left font-medium text-text-secondary">股票</th>
-                    <th className="px-3 py-1.5 text-right font-medium text-text-secondary">现价</th>
-                    <th className="px-3 py-1.5 text-center font-medium text-text-secondary">今日</th>
-                    <th className="px-3 py-1.5 text-center font-medium text-text-secondary">位置</th>
-                    <th className="px-3 py-1.5 text-center font-medium text-text-secondary">RSI</th>
-                    <th className="px-3 py-1.5 text-left font-medium text-text-secondary">结论与理由</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {poolReport.items.map((it) => (
-                    <tr key={it.symbol + (it.market || '')} className="border-t border-border">
-                      <td className="px-3 py-1.5 text-xs text-text-secondary">{it.group || '默认'}</td>
-                      <td className="px-3 py-1.5">
-                        <span className="font-medium">{it.name}</span>
-                        <span className="text-xs text-text-muted font-number ml-1.5">{it.symbol}</span>
-                      </td>
-                      <td className="px-3 py-1.5 text-right font-number">{it.price != null ? fmtNum(it.price, it.market === '港股' ? 3 : 2) : '—'}</td>
-                      <td className={'px-3 py-1.5 text-right font-number ' + upDownCls(it.change_pct != null ? Number(it.change_pct) : null)}>
-                        {it.change_pct != null ? (Number(it.change_pct) > 0 ? '+' : '') + Number(it.change_pct).toFixed(2) + '%' : '—'}
-                      </td>
-                      <td className="px-3 py-1.5 text-center">
-                        {it.position === 'high' && <Badge variant="danger">{it.position_label || '高位'}</Badge>}
-                        {it.position === 'mid' && <Badge variant="info">{it.position_label || '中位'}</Badge>}
-                        {it.position === 'low' && <Badge variant="success">{it.position_label || '低位'}</Badge>}
-                      </td>
-                      <td className="px-3 py-1.5 text-center font-number">{it.rsi != null ? Number(it.rsi).toFixed(1) : '—'}</td>
-                      <td className="px-3 py-1.5">
-                        <span className={'font-medium ' + (it.verdict === '值得关注' ? 'text-success' : it.verdict === '回避追高' ? 'text-danger' : 'text-text-secondary')}>
-                          {it.verdict || '—'}
-                        </span>
-                        <span className="text-xs text-text-muted ml-1.5">{it.reason || ''}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="space-y-1">
+              {poolReport.items.map((it) => (
+                <div key={it.symbol + it.market} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm border-t border-border pt-1.5 first:border-t-0 first:pt-0">
+                  <span className="text-xs text-text-muted w-20 truncate">{it.group || '默认'}</span>
+                  <span className="font-medium">{it.name}</span>
+                  <span className="text-xs text-text-muted font-number">{it.symbol}</span>
+                  <span className="font-number">{it.price != null ? fmtNum(it.price, it.market === '港股' ? 3 : 2) : '—'}</span>
+                  {it.position === 'high' && <Badge variant="danger">高位</Badge>}
+                  {it.position === 'mid' && <Badge variant="info">中位</Badge>}
+                  {it.position === 'low' && <Badge variant="success">低位</Badge>}
+                  <span className={"text-xs " + (it.verdict === '值得关注' ? 'text-success font-medium' : it.verdict === '回避追高' ? 'text-danger' : 'text-text-secondary')}>{it.verdict}</span>
+                  <span className="text-xs text-text-muted">{it.reason}</span>
+                </div>
+              ))}
+              {(poolReport.errors || []).map((e, i) => <p key={'e' + i} className="text-xs text-warning">⚠ {e}</p>)}
             </div>
           )}
         </Card>
       )}
 
-      {/* 添加自选股 */}
+      {/* 添加区：搜索式 */}
       <Card>
-        <h2 className="font-bold text-sm mb-3">添加观察股（可建多个表：A股表 / 港股表…）</h2>
         <div className="flex flex-wrap items-center gap-2">
-          <input
-            value={form.symbol}
-            onChange={(e) => setForm((f) => ({ ...f, symbol: e.target.value }))}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); }}
-            placeholder="股票代码，如 600519 / 00700"
-            className={inputCls + ' w-44'}
-          />
-          <select
-            value={form.market}
-            onChange={(e) => setForm((f) => ({ ...f, market: e.target.value }))}
-            className={inputCls}
-          >
-            <option value="A股">A股</option>
-            <option value="港股">港股</option>
+          <div className="relative flex-1 min-w-[220px]">
+            <input value={kw} onChange={(e) => setKw(e.target.value)} placeholder="输入代码 / 名称 / 拼音首字母搜索，如 600519 / 百度 / bd"
+              className="w-full rounded border border-border px-3 py-2 text-sm outline-none focus:border-primary-500" />
+            {searching && <div className="absolute right-2 top-2.5 text-xs text-text-muted">搜索中...</div>}
+            {cands.length > 0 && (
+              <div className="absolute z-20 mt-1 w-full rounded border border-border bg-surface shadow-lg max-h-64 overflow-auto">
+                {cands.map((c) => (
+                  <button key={c.symbol + c.market} onClick={() => pick(c)}
+                    className="w-full text-left px-3 py-2 hover:bg-primary-50 flex items-center gap-2 text-sm">
+                    <span className="font-medium">{c.name}</span>
+                    <span className="text-xs text-text-muted font-number">{c.symbol}</span>
+                    <Badge variant={c.market === '港股' ? 'info' : 'default'}>{c.market}</Badge>
+                    <span className="ml-auto text-xs text-text-muted font-number">{c.price != null ? fmtNum(c.price, c.market === '港股' ? 3 : 2) : ''}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <select value={active === '__all__' ? addGroup : active} onChange={(e) => setAddGroup(e.target.value)} disabled={active !== '__all__'} className="rounded border border-border px-2 py-2 text-sm bg-white">
+            {active !== '__all__' ? <option value={active}>{active}</option> : (<><option value="">加入表…</option>{groups.map((g) => <option key={g.name} value={g.name}>{g.name}{g.market ? '（' + MARKET_LABEL[g.market] + '）' : ''}</option>)}<option value="__new__">＋ 新建表并添加…</option></>)}
           </select>
-          <input
-            value={form.group}
-            onChange={(e) => setForm((f) => ({ ...f, group: e.target.value }))}
-            placeholder="分组名（默认）"
-            list="wl-groups"
-            className={inputCls + ' w-36'}
-          />
-          <datalist id="wl-groups">
-            {groupNames.map((g) => <option key={g} value={g} />)}
-          </datalist>
-          <Button onClick={handleAdd} disabled={submitting || !form.symbol.trim()}>
-            {submitting ? '添加中...' : '添加'}
-          </Button>
+          <Button size="sm" disabled={!picked || (active === '__all__' && !addGroup)} onClick={addToPool}>加入 {picked ? picked.name : ''}</Button>
         </div>
-        {msg && (
-          <p className={`text-sm mt-2 ${msg.type === 'ok' ? 'text-success' : 'text-danger'}`}>{msg.text}</p>
-        )}
+        <p className="text-xs text-text-muted mt-2">选择候选后点「加入」；表限市场时会提示错配股票。</p>
       </Card>
 
-      {/* 分组 + 列表 */}
+      {/* 列表区 */}
       <Card>
-        <div className="flex flex-wrap items-center gap-1.5 mb-3">
-          <h2 className="font-bold text-sm mr-1">我的自选</h2>
-          {tabs.map((t) => (
-            <button
-              key={t.name}
-              onClick={() => setActiveGroup(t.name)}
-              className={`h-8 px-3 rounded text-xs font-medium transition-colors ${
-                activeGroup === t.name ? 'bg-primary-500 text-white' : 'bg-primary-50 text-primary-700 hover:bg-primary-100'
-              }`}
-            >
-              {t.name}<span className={`ml-1 ${activeGroup === t.name ? 'opacity-80' : 'text-text-muted'}`}>{t.count}</span>
-            </button>
-          ))}
-        </div>
-        {loadingList ? (
-          <Loading />
-        ) : groupItems.length === 0 ? (
-          <EmptyState icon="⭐" title="暂无自选股" description="先在上方添加一只（如 600519 贵州茅台），即可查看实时行情、K 线与关联资讯。" />
-        ) : (
-          <div className="divide-y divide-border">
-            {groupItems.map((item) => (
-              <div
-                key={item.id}
-                onClick={() => setSelectedId(item.id)}
-                className={`flex items-center gap-3 py-2 px-2 -mx-2 rounded cursor-pointer transition-colors ${
-                  selectedId === item.id ? 'bg-primary-50' : 'hover:bg-primary-50/50'
-                }`}
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-sm">{item.name || item.symbol}</span>
-                    <span className="text-xs text-text-muted font-number">{item.symbol}</span>
-                    <Badge variant={item.market === '港股' ? 'info' : 'default'}>{item.market || 'A股'}</Badge>
+        {active === '__all__' ? (
+          <div className="space-y-4">
+            {groups.length === 0 && items.length === 0 && (<EmptyState icon="⭐" title="还没有任何表" description="点右上角「＋」新建空表（如 A股表 / 港股观察），或直接在搜索框添加股票。" className="py-6" />)}
+            {groups.map((g) => {
+              const gItems = items.filter((i) => (i.group_name || '默认') === g.name);
+              return (
+                <div key={g.name} className="rounded border border-border">
+                  <div className="flex items-center gap-2 px-3 py-2 bg-bg-secondary/60 rounded-t">
+                    <button onClick={() => setActive(g.name)} className="font-bold text-sm text-primary-900 hover:text-primary-600">{g.name}</button>
+                    {g.market ? <Badge variant="default">{MARKET_LABEL[g.market]}</Badge> : null}
+                    <span className="text-xs text-text-muted">{gItems.length} 只</span>
+                    {gItems.length === 0 && <span className="text-xs text-text-muted">（空表）</span>}
+                    <span className="ml-auto flex items-center gap-2">
+                      {gItems.length > 0 && <button className="text-xs text-primary-600 hover:text-primary-700" onClick={() => setActive(g.name)}>进入 ›</button>}
+                      <button className="text-xs text-text-secondary hover:text-primary-600" onClick={() => { setManageTarget(g); setManageForm({ name: g.name, market: g.market || '', note: g.note || '' }); }}>管理</button>
+                    </span>
                   </div>
+                  {gItems.length === 0 ? <p className="px-3 py-4 text-center text-xs text-text-muted">这个表还是空的——在下方搜索添加第一只股票，或点「＋」规划新表</p> : <div className="px-3 pb-1">{gItems.map(renderRow)}</div>}
                 </div>
-                <select
-                  value={item.group_name || '默认'}
-                  onChange={(e) => handleMoveGroup(item, e.target.value)}
-                  onClick={(e) => e.stopPropagation()}
-                  className="h-8 rounded border border-border text-xs bg-white px-1 focus:outline-none focus:border-primary-500"
-                  title="改分组"
-                >
-                  {groupNames.map((g) => <option key={g} value={g}>{g}</option>)}
-                </select>
-                <Button variant="danger" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(item); }}>
-                  删除
-                </Button>
-              </div>
-            ))}
+              );
+            })}
+          </div>
+        ) : (
+          <div>
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              <button onClick={() => setActive('__all__')} className="text-xs text-primary-600 hover:text-primary-700">← 返回全部</button>
+              <h2 className="font-bold text-sm">{active} ｜ {groupItems?.length ?? 0} 只</h2>
+              {activeGroupMeta?.market ? <Badge variant="default">{MARKET_LABEL[activeGroupMeta.market]}</Badge> : null}
+              <span className="ml-auto flex items-center gap-2">
+                <Button variant="secondary" size="sm" onClick={() => { setManageTarget(activeGroupMeta || { name: active, market: '', note: '' }); setManageForm({ name: active, market: activeGroupMeta?.market || '', note: activeGroupMeta?.note || '' }); }}>管理表</Button>
+              </span>
+            </div>
+            {(groupItems || []).length === 0 ? <EmptyState icon="📭" title="这个表还是空的" description="在下方搜索框找股票加入本表。" className="py-6" /> : <div>{ (groupItems || []).map(renderRow) }</div>}
           </div>
         )}
       </Card>
 
-      {/* 选中股票详情 */}
-      {selected && (
-        <>
-          <Card>
-            <div className="flex flex-wrap items-center gap-3 mb-3">
-              <h2 className="font-bold text-sm">{selected.name || selected.symbol}</h2>
-              <span className="text-xs text-text-muted font-number">{selected.symbol}</span>
-              <Badge variant={selected.market === '港股' ? 'info' : 'default'}>{selected.market || 'A股'}</Badge>
-              {quote && (
-                <span className="text-xs text-text-muted">
-                  更新于 {quote.timestamp}{quote.source ? ' · ' + quote.source : ''}
-                </span>
-              )}
-              <div className="ml-auto flex gap-2">
-                <Button size="sm" variant="secondary" onClick={() => loadQuote(selected)} disabled={quoteLoading}>
-                  {quoteLoading ? '刷新中...' : '刷新行情'}
-                </Button>
-                <Button size="sm" disabled title="S11 模块实现，敬请期待">一键加入追踪</Button>
-              </div>
+      {/* 建空表对话框 */}
+      {createOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setCreateOpen(false)}>
+          <div className="bg-surface rounded-xl shadow-xl w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-bold text-primary-900 mb-3">新建表</h3>
+            <div className="space-y-3">
+              <div><div className="text-xs text-text-secondary mb-1">表名 *（如 A股表 / 港股观察）</div><input value={createForm.name} onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })} className="w-full rounded border border-border px-3 py-2 text-sm outline-none focus:border-primary-500" placeholder="A股表" /></div>
+              <div><div className="text-xs text-text-secondary mb-1">市场范围（可选；不限 = 可混放 A股+港股）</div>
+                <select value={createForm.market} onChange={(e) => setCreateForm({ ...createForm, market: e.target.value })} className="w-full rounded border border-border px-3 py-2 text-sm bg-white"><option value="">不限（可混合 A股 + 港股）</option><option value="A股">仅 A股</option><option value="港股">仅 港股</option></select></div>
+              <div><div className="text-xs text-text-secondary mb-1">备注（可选）</div><input value={createForm.note} onChange={(e) => setCreateForm({ ...createForm, note: e.target.value })} className="w-full rounded border border-border px-3 py-2 text-sm outline-none focus:border-primary-500" placeholder="如：打算配置的港股科技" /></div>
             </div>
-            {quoteError && <p className="text-sm text-danger mb-2">{quoteError}</p>}
-            {quote ? (
-              <>
-                <div className="flex items-end gap-3 mb-3">
-                  <span className="text-3xl font-number leading-none">{fmtNum(quote.price)}</span>
-                  <span className={`text-sm font-number mb-0.5 ${upDownCls(quote.change_pct)}`}>
-                    {quote.change != null && quote.change !== 0 ? (quote.change > 0 ? '+' : '') + quote.change.toFixed(2) : ''}
-                    {quote.change_pct != null && quote.change_pct !== 0 ? ' ' + (quote.change_pct > 0 ? '+' : '') + quote.change_pct.toFixed(2) + '%' : ''}
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-                  <Stat label="今开" value={fmtNum(quote.open)} />
-                  <Stat label="最高" value={fmtNum(quote.high)} cls={upDownCls(quote.high != null && quote.prev_close != null ? quote.high - quote.prev_close : null)} />
-                  <Stat label="最低" value={fmtNum(quote.low)} cls={upDownCls(quote.low != null && quote.prev_close != null ? quote.low - quote.prev_close : null)} />
-                  <Stat label="昨收" value={fmtNum(quote.prev_close)} />
-                  <Stat label="成交量" value={fmtVolume(quote.volume)} />
-                  <Stat label="成交额" value={fmtBig(quote.amount)} />
-                  <Stat label="换手率" value={quote.turnover != null ? fmtNum(quote.turnover) + '%' : '—'} />
-                  <Stat label="PE(TTM)" value={quote.pe != null ? fmtNum(quote.pe) : '—'} />
-                  <Stat label="总市值" value={fmtBig(quote.total_market_cap)} />
-                  <Stat label="流通市值" value={fmtBig(quote.float_market_cap)} />
-                </div>
-              </>
-            ) : quoteLoading ? (
-              <Loading className="py-4" text="行情加载中..." />
-            ) : null}
-          </Card>
+            <div className="mt-4 flex justify-end gap-2"><Button variant="secondary" size="sm" onClick={() => setCreateOpen(false)}>取消</Button><Button size="sm" onClick={saveGroup} disabled={!createForm.name.trim()}>创建</Button></div>
+          </div>
+        </div>
+      )}
 
-          <Card>
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-              <h2 className="font-bold text-sm">
-                K 线走势
-                <span className="text-xs text-text-muted font-normal ml-2">
-                  {period === 'day' ? '日K · 120 根' : period === 'week' ? '日K按周聚合' : '日K按月聚合'}
-                </span>
-              </h2>
-              <div className="flex gap-1">
-                {(Object.keys(PERIODS) as Period[]).map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => setPeriod(p)}
-                    className={`h-7 px-3 rounded text-xs font-medium transition-colors ${
-                      period === p ? 'bg-primary-500 text-white' : 'bg-primary-50 text-primary-700 hover:bg-primary-100'
-                    }`}
-                  >
-                    {PERIODS[p].label}
-                  </button>
-                ))}
-              </div>
+      {/* 管理表对话框 */}
+      {manageTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setManageTarget(null)}>
+          <div className="bg-surface rounded-xl shadow-xl w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-bold text-primary-900 mb-3">管理表「{manageTarget.name}」</h3>
+            <div className="space-y-3">
+              <div><div className="text-xs text-text-secondary mb-1">表名</div><input value={manageForm.name} onChange={(e) => setManageForm({ ...manageForm, name: e.target.value })} className="w-full rounded border border-border px-3 py-2 text-sm outline-none focus:border-primary-500" /></div>
+              <div><div className="text-xs text-text-secondary mb-1">市场范围</div><select value={manageForm.market} onChange={(e) => setManageForm({ ...manageForm, market: e.target.value })} className="w-full rounded border border-border px-3 py-2 text-sm bg-white"><option value="">不限（可混合）</option><option value="A股">仅 A股</option><option value="港股">仅 港股</option></select></div>
+              <div><div className="text-xs text-text-secondary mb-1">备注</div><input value={manageForm.note} onChange={(e) => setManageForm({ ...manageForm, note: e.target.value })} className="w-full rounded border border-border px-3 py-2 text-sm outline-none focus:border-primary-500" /></div>
             </div>
-            {klineError && <p className="text-sm text-danger mb-2">{klineError}</p>}
-            {displayBars.length > 0 ? (
-              <KLineChart bars={displayBars} height={430} />
-            ) : klineLoading ? (
-              <Loading className="py-4" text="K线加载中..." />
-            ) : (
-              <EmptyState icon="📉" title="暂无K线数据" description="后端或数据源暂未返回 K 线，可稍后刷新重试。" className="py-6" />
-            )}
-          </Card>
+            <div className="mt-4 flex items-center justify-between">
+              <Button variant="danger" size="sm" onClick={() => void removeGroup(manageTarget)}>删除表</Button>
+              <div className="flex gap-2"><Button variant="secondary" size="sm" onClick={() => setManageTarget(null)}>取消</Button><Button size="sm" onClick={saveManage} disabled={!manageForm.name.trim()}>保存</Button></div>
+            </div>
+          </div>
+        </div>
+      )}
 
-          <Card>
+      {/* 单只详情（走势） */}
+      {detail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setDetail(null)}>
+          <div className="bg-surface rounded-xl shadow-xl w-full max-w-2xl p-5 max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2 mb-3">
-              <h2 className="font-bold text-sm">关联资讯</h2>
-              <span className="text-xs text-text-muted">关键词：{selected.name || selected.symbol}</span>
+              <span className="text-lg font-bold text-primary-900">{detail.name}</span><span className="text-xs text-text-muted font-number">{detail.symbol}</span><Badge variant={detail.market === '港股' ? 'info' : 'default'}>{detail.market || 'A股'}</Badge>
+              {quote && <span className="ml-auto text-sm font-number">{fmtNum(quote.price, quote.market === '港股' ? 3 : 2)} <span className={"text-xs " + upDownCls(quote.change_pct)}>{quote.change_pct != null ? (quote.change_pct > 0 ? '+' : '') + quote.change_pct.toFixed(2) + '%' : ''}</span></span>}
+              <button onClick={() => setDetail(null)} className="text-text-muted hover:text-text text-lg leading-none">×</button>
             </div>
-            {newsError && <p className="text-sm text-danger mb-2">{newsError}</p>}
-            {news.length > 0 ? (
-              <div className="divide-y divide-border">
-                {news.map((n) => (
-                  <div key={n.id} className="py-2.5">
-                    <div className="flex items-center gap-2">
-                      <Badge variant={LEVEL_BADGE[n.level] || 'default'}>{n.level || '一般'}</Badge>
-                      <span className="text-xs text-text-muted">{n.source || n.market || ''}</span>
-                      <span className="text-xs text-text-muted ml-auto">{n.published_at || ''}</span>
-                    </div>
-                    {n.url ? (
-                      <a href={n.url} target="_blank" rel="noreferrer" className="block text-sm font-medium text-text mt-1 hover:text-primary-700">
-                        {n.title}
-                      </a>
-                    ) : (
-                      <p className="text-sm font-medium text-text mt-1">{n.title}</p>
-                    )}
-                    {n.summary && <p className="text-xs text-text-secondary mt-0.5 line-clamp-2">{n.summary}</p>}
-                  </div>
-                ))}
-              </div>
-            ) : newsLoading ? (
-              <Loading className="py-4" text="资讯加载中..." />
-            ) : (
-              <EmptyState
-                icon="📰"
-                title="暂无关联资讯"
-                description={'暂未找到与「' + (selected.name || selected.symbol) + '」相关的资讯。'}
-                className="py-6"
-              />
-            )}
-          </Card>
-        </>
+            {klineLoading ? <Loading /> : klineBars.length > 0 ? <KLineChart bars={klineBars} height={320} /> : <p className="text-sm text-text-muted">K线暂不可用</p>}
+            {relatedNews.length > 0 && (<div className="mt-3"><div className="text-xs font-bold text-text-secondary mb-1">关联资讯</div><div className="space-y-1">{relatedNews.slice(0, 5).map((n, i) => <p key={i} className="text-xs text-text-secondary">· {n.title}</p>)}</div></div>)}
+          </div>
+        </div>
       )}
     </div>
   );

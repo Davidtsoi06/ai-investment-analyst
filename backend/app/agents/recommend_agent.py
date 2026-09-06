@@ -49,7 +49,7 @@ INDUSTRY_POOLS: list[dict] = [
                 ('002371', '北方华创', 'A股'), ('688256', '寒武纪', 'A股'), ('300661', '圣邦股份', 'A股')]},
     {'name': '互联网/港股科技', 'keywords': ['互联网', '港股科技', '腾讯', '阿里', '美团', '电商', '平台'],
      'stocks': [('00700', '腾讯控股', '港股'), ('09988', '阿里巴巴', '港股'), ('03690', '美团', '港股'),
-                ('01810', '小米集团', '港股'), ('09618', '京东集团', '港股'), ('01024', '快手', '港股')]},
+                ('01810', '小米集团', '港股'), ('09888', '百度集团', '港股'), ('09618', '京东集团', '港股'), ('01024', '快手', '港股')]},
     {'name': '银行', 'keywords': ['银行', '银行业', '银行股', '高股息', '红利'],
      'stocks': [('600036', '招商银行', 'A股'), ('601398', '工商银行', 'A股'), ('601288', '农业银行', 'A股'),
                 ('601988', '中国银行', 'A股'), ('600000', '浦发银行', 'A股')]},
@@ -138,23 +138,32 @@ def _candidate_pool(profile: dict, intent: str = '', scope_type: str = 'market',
         markets = ['A股']
 
     if scope_type == 'pool':
-        # 仅从股票池（watchlist 分组）取；按画像市场过滤，不补足
+        # 仅从股票池（watchlist 分组）取；组市场范围限定（v1.1.3）+ 画像市场过滤，不补足
         conn = get_connection()
         try:
             if groups:
                 marks = ','.join('?' * len(groups))
                 rows = conn.execute(
-                    f'SELECT symbol, name, market FROM watchlist WHERE group_name IN ({marks}) '
-                    'ORDER BY group_name, sort_order, id',
+                    "SELECT w.symbol, w.name, w.market, COALESCE(g.market, '') AS group_market "
+                    "FROM watchlist w LEFT JOIN watch_groups g ON g.name = w.group_name "
+                    f"WHERE w.group_name IN ({marks}) ORDER BY w.group_name, w.sort_order, w.id",
                     groups,
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    'SELECT symbol, name, market FROM watchlist ORDER BY group_name, sort_order, id'
+                    "SELECT w.symbol, w.name, w.market, COALESCE(g.market, '') AS group_market "
+                    "FROM watchlist w LEFT JOIN watch_groups g ON g.name = w.group_name "
+                    "ORDER BY w.group_name, w.sort_order, w.id"
                 ).fetchall()
         finally:
             conn.close()
-        pool = [dict(r) for r in rows if dict(r).get('market') in markets]
+        pool = []
+        for r in rows:
+            d = dict(r)
+            if d.get('group_market') and d.get('market') != d['group_market']:
+                continue  # 表限港股/限A股时跳过错配股票
+            if d.get('market') in markets:
+                pool.append(d)
         # 分组内去重（同代码多组场景）
         seen: set = set()
         dedup = []
