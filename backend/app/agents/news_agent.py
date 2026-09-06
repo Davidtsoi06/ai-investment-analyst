@@ -42,6 +42,18 @@ def _content_hash(title: str, url: str) -> str:
     return hashlib.md5((title + url).encode('utf-8')).hexdigest()
 
 
+def _pool_mark_names() -> list[tuple]:
+    """持仓 + 我的股票池的名称/代码（资讯打股票标签用）"""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            'SELECT name, symbol FROM holdings UNION SELECT name, symbol FROM watchlist WHERE name IS NOT NULL'
+        ).fetchall()
+        return [(r['name'] or '', r['symbol'] or '') for r in rows]
+    finally:
+        conn.close()
+
+
 def _load_recent_titles(limit: int = 50) -> list[str]:
     conn = get_connection()
     try:
@@ -92,13 +104,22 @@ def collect_and_analyze() -> dict:
                 level = _rule_level(it.title)
                 summary = it.summary or it.title
             holding_related = any(h and h in (it.title + it.summary) for h in holdings)
+            # V1.1.1 N2：命中持仓∪股票池的条目打股票标签（related_stocks JSON）
+            related: list[str] = []
+            text = (it.title or '') + (it.summary or '')
+            for name, code in _pool_mark_names():
+                if name and name in text and name not in related:
+                    related.append(name)
+                elif code and code in text and code not in related:
+                    related.append(code)
             cur = conn.execute(
                 '''INSERT OR IGNORE INTO news_cache
-                (title, url, source, market, summary, level, content_hash, published_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'''
+                (title, url, source, market, summary, level, content_hash, published_at, created_at, region, related_stocks)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'cn', ?)'''
                 , (
                 it.title, it.url, it.source, it.market, summary, level,
                 _content_hash(it.title, it.url), it.published_at, utc_now(),
+                json.dumps(related[:6], ensure_ascii=False) if related else None,
             ))
             if cur.rowcount > 0:
                 saved += 1

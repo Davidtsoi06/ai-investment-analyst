@@ -15,6 +15,7 @@ import Risk from './pages/Risk';
 import Review from './pages/Review';
 import Chat from './pages/Chat';
 import Settings from './pages/Settings';
+import StockAnalyze from './pages/StockAnalyze';
 import { getAiStatus, getProfile } from './services/api';
 
 /** 引导完成标记：写在本机 localStorage，任何版本更新/重启都不会再要求填写（仅首次使用弹出） */
@@ -139,6 +140,7 @@ export default function App() {
           <Route path="/review" element={<Review />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/stock" element={<StockAnalyze />} />
         </Route>
         </Routes>
       </HashRouter>

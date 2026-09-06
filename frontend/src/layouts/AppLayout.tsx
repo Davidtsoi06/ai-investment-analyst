@@ -12,6 +12,7 @@ const navItems = [
   { path: '/risk', label: '风险分析', icon: '🛡️' },
   { path: '/review', label: '投资复盘', icon: '🔄' },
   { path: '/chat', label: '智能问答', icon: '💬' },
+  { path: '/stock', label: '个股诊股', icon: '🔍' },
   { path: '/settings', label: '系统设置', icon: '⚙️' },
 ];
 

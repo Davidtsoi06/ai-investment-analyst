@@ -31,6 +31,8 @@ async def lifespan(_app: FastAPI):
     start_scheduler()
     register_hourly_sync()
     register_news_jobs()
+    from .data_sources.news.overseas_fetcher import register_overseas_jobs  # noqa: E402
+    register_overseas_jobs()
     register_recommend_jobs()
     start_tracking_polling()
     register_summary_jobs()
@@ -351,9 +353,47 @@ def register_news_jobs() -> None:
         except Exception as e:  # noqa: BLE001
             logger.error('盘前推送失败: %s', e)
 
+    # V1.1.1 N2：盘中加两轮资讯抓取（10:15 / 13:45），提高个股与板块资讯时效
+    def _intraday_collect() -> None:
+        if not is_trading_day('A股'):
+            return
+        try:
+            from .agents.news_agent import collect_and_analyze
+            collect_and_analyze()
+        except Exception as e:  # noqa: BLE001
+            logger.error('盘中资讯抓取失败: %s', e)
+
     add_cron_job(_collect_job, hour=8, minute=0, job_id='news_premarket_collect')
     add_cron_job(_push_job, hour=9, minute=0, job_id='news_premarket_push')
-    logger.info('盘前资讯定时任务已注册（08:00 抓取 / 09:00 推送，仅交易日）')
+    add_cron_job(_intraday_collect, hour=10, minute=15, job_id='news_intraday_1')
+    add_cron_job(_intraday_collect, hour=13, minute=45, job_id='news_intraday_2')
+    logger.info('资讯定时任务已注册（08:00 抓取 / 09:00 推送 / 10:15·13:45 盘中抓取，仅交易日）')
+
+
+@app.get("/api/stock/analysis")
+def stock_analysis_api(symbol: str = Query(..., min_length=1), market: str = Query('A股'),
+                       x_backend_token: str = Header(default="")):
+    """一键诊股（M3）：聚合行情/K线/技术/位置/资讯/研报"""
+    require_token(x_backend_token)
+    symbol, market = _validate_symbol_market(symbol, market)
+    from .services.stock_analysis import analyze_stock  # noqa: E402
+    return analyze_stock(symbol, market)
+
+
+@app.post("/api/stock/analysis/ai")
+def stock_analysis_ai(body: dict, x_backend_token: str = Header(default="")):
+    """AI 综合点评（传入 GET /api/stock/analysis 的结果）"""
+    require_token(x_backend_token)
+    from .services.stock_analysis import ai_comment  # noqa: E402
+    return ai_comment(body or {})
+
+
+@app.post("/api/news/fetch-overseas")
+def news_fetch_overseas(x_backend_token: str = Header(default="")):
+    """手动抓取一轮海外资讯（美/英/日/韩；多源容错 + 自动翻译中文标题）"""
+    require_token(x_backend_token)
+    from .data_sources.news.overseas_fetcher import collect_overseas  # noqa: E402
+    return collect_overseas()
 
 
 @app.get("/api/news/latest")
@@ -362,13 +402,23 @@ def news_latest(limit: int = Query(30, ge=1, le=100), x_backend_token: str = Hea
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT id, title, url, source, market, summary, level, published_at, created_at "
+            "SELECT id, title, url, source, market, summary, level, published_at, region, related_stocks "
             "FROM news_cache ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
-        return [dict(r) for r in rows]
     finally:
         conn.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            import json as _j
+            d['related'] = _j.loads(d.get('related_stocks')) if d.get('related_stocks') else []
+        except (ValueError, TypeError):
+            d['related'] = []
+        d.pop('related_stocks', None)
+        out.append(d)
+    return out
 
 
 @app.post("/api/news/premarket/run")

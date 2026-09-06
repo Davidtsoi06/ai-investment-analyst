@@ -96,6 +96,9 @@ function RecCard({ rec }: { rec: RecommendItem }) {
           </span>
         )}
       </div>
+      <div className="text-right -mt-1">
+        <Link to={'/stock?symbol=' + encodeURIComponent(rec.symbol) + '&market=' + encodeURIComponent(rec.market || 'A股')} className="text-xs text-primary-600 hover:text-primary-700">🔍 诊股 →</Link>
+      </div>
       <ConfBar value={rec.confidence} />
       {short ? (
         <div className="grid grid-cols-2 gap-2">
