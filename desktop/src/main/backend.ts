@@ -312,7 +312,7 @@ class BackendManager {
 
   async request(method: string, path: string, body?: unknown): Promise<unknown> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 60_000);
+    const timer = setTimeout(() => controller.abort(), 120_000); // V1.1.3: AI 长请求放宽到 120s
     let res: Response;
     try {
       res = await fetch(this.backendUrl() + path, {
@@ -327,8 +327,9 @@ class BackendManager {
     } catch (e) {
       clearTimeout(timer);
       const msg = e instanceof Error && e.name === 'AbortError'
-        ? '请求超时（后端处理超过 60 秒）'
+        ? '请求超时（后端处理超过 120 秒）'
         : '无法连接后端: ' + (e instanceof Error ? e.message : String(e));
+      log('ERROR', `[backend] 转发失败 ${method} ${path}: ${msg}`); // V1.1.3: 转发失败留痕便于排查
       return { ok: false, status: 0, error: msg };
     }
     clearTimeout(timer);
@@ -336,7 +337,9 @@ class BackendManager {
     let json: unknown = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = text; }
     if (!res.ok) {
-      return { ok: false, status: res.status, error: typeof json === 'string' ? json : JSON.stringify(json) };
+      const errMsg = typeof json === 'string' ? json : JSON.stringify(json);
+      log('WARN', `[backend] 后端响应 ${res.status} ${method} ${path}: ${String(errMsg).slice(0, 300)}`); // V1.1.3: 失败留痕
+      return { ok: false, status: res.status, error: errMsg };
     }
     return json;
   }

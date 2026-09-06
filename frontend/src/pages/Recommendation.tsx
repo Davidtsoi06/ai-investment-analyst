@@ -254,7 +254,14 @@ export default function Recommendation() {
     setIntentOpen(false);
     setGenerating(true);
     setMsg(null);
-    const r = await generateRecommendations({ intent, mode, scope: { type: scopeType, groups } });
+    let r;
+    try {
+      r = await generateRecommendations({ intent, mode, scope: { type: scopeType, groups } });
+    } catch (e) {
+      setGenerating(false);
+      setMsg({ type: 'err', text: '生成失败：' + (e instanceof Error ? e.message : String(e)) });
+      return;
+    }
     setGenerating(false);
     if (!r.ok) {
       const d = r.data as { reason?: string } | undefined;

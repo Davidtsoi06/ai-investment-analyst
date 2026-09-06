@@ -206,7 +206,18 @@ export default function Chat() {
       sendingRef.current = true;
       setSending(true);
       setMessages((prev) => [...prev, { id: nextId(), role: 'user', text: q }]);
-      const r = await askChat(q);
+      let r;
+      try {
+        r = await askChat(q);
+      } catch (e) {
+        sendingRef.current = false;
+        setSending(false);
+        setMessages((prev) => [
+          ...prev,
+          { id: nextId(), role: 'assistant', text: '回答失败：' + (e instanceof Error ? e.message : String(e)), error: true },
+        ]);
+        return;
+      }
       if (r.ok && r.data) {
         const d = r.data;
         setMessages((prev) => [
