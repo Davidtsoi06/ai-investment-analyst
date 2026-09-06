@@ -18,12 +18,12 @@ VALID_MARKETS = ('A股', '港股')
 
 
 def list_watchlist() -> list[dict[str, Any]]:
-    """全部自选股，按分组名 / 组内排序 / id 排序"""
+    """全部自选股，按分组名 / 组内代码从小到大排序（V1.1.3 用户反馈：按代码大小排序）"""
     conn = get_connection()
     try:
         rows = conn.execute(
             "SELECT id, symbol, name, market, group_name, sort_order, created_at, updated_at "
-            "FROM watchlist ORDER BY group_name, sort_order, id"
+            "FROM watchlist ORDER BY group_name, CAST(symbol AS INTEGER), id"
         ).fetchall()
         return [dict(r) for r in rows]
     finally:

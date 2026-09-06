@@ -63,12 +63,12 @@ def analyze_pool(groups: list[str] | None = None) -> dict:
             marks = ','.join('?' * len(groups))
             rows = conn.execute(
                 f'SELECT symbol, name, market, group_name FROM watchlist WHERE group_name IN ({marks}) '
-                'ORDER BY group_name, sort_order, id',
+                'ORDER BY group_name, CAST(symbol AS INTEGER), id',
                 groups,
             ).fetchall()
         else:
             rows = conn.execute(
-                'SELECT symbol, name, market, group_name FROM watchlist ORDER BY group_name, sort_order, id'
+                'SELECT symbol, name, market, group_name FROM watchlist ORDER BY group_name, CAST(symbol AS INTEGER), id'
             ).fetchall()
     finally:
         conn.close()

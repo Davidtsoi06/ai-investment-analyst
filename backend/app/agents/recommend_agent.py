@@ -146,14 +146,14 @@ def _candidate_pool(profile: dict, intent: str = '', scope_type: str = 'market',
                 rows = conn.execute(
                     "SELECT w.symbol, w.name, w.market, COALESCE(g.market, '') AS group_market "
                     "FROM watchlist w LEFT JOIN watch_groups g ON g.name = w.group_name "
-                    f"WHERE w.group_name IN ({marks}) ORDER BY w.group_name, w.sort_order, w.id",
+                    f"WHERE w.group_name IN ({marks}) ORDER BY w.group_name, CAST(w.symbol AS INTEGER), w.id",
                     groups,
                 ).fetchall()
             else:
                 rows = conn.execute(
                     "SELECT w.symbol, w.name, w.market, COALESCE(g.market, '') AS group_market "
                     "FROM watchlist w LEFT JOIN watch_groups g ON g.name = w.group_name "
-                    "ORDER BY w.group_name, w.sort_order, w.id"
+                    "ORDER BY w.group_name, CAST(w.symbol AS INTEGER), w.id"
                 ).fetchall()
         finally:
             conn.close()
@@ -193,7 +193,7 @@ def _candidate_pool(profile: dict, intent: str = '', scope_type: str = 'market',
         conn = get_connection()
         try:
             rows = conn.execute(
-                'SELECT symbol, name, market FROM watchlist ORDER BY group_name, sort_order, id'
+                'SELECT symbol, name, market FROM watchlist ORDER BY group_name, CAST(symbol AS INTEGER), id'
             ).fetchall()
         finally:
             conn.close()
