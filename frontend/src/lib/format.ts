@@ -1,7 +1,7 @@
 // 前端共享格式化/兼容工具：统一各页面的数值显示与涨跌配色（需求文档十一章 UI 规范）
 // 涨跌配色规范：涨绿 #52C41A / 跌红 #FF4D4F（成功=涨=绿，与 Amount 组件一致）
 
-/** 兼容后端返回数组或 {items:[...]}/{list:[...]}/{reports:[...]}/{positions:[...]} 等包装 */
+/** 兼容后端返回数组或 {items:[...]}/{list:[...]}/{reports:[...]}/{positions:[...]}/{bars:[...]} 等包装 */
 export function toList<T>(data: unknown): T[] {
   if (Array.isArray(data)) return data as T[];
   if (data && typeof data === 'object') {
@@ -10,6 +10,7 @@ export function toList<T>(data: unknown): T[] {
     if (Array.isArray(d.list)) return d.list as T[];
     if (Array.isArray(d.reports)) return d.reports as T[];
     if (Array.isArray(d.positions)) return d.positions as T[];
+    if (Array.isArray(d.bars)) return d.bars as T[]; // K线接口返回 {symbol, market, bars:[...]}
   }
   return [];
 }
