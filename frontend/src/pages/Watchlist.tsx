@@ -85,7 +85,12 @@ export default function Watchlist() {
 
   const addToPool = async () => {
     if (!picked) return;
-    const targetGroup = active === '__all__' ? (addGroup.trim() || '默认') : active;
+    if (active === '__all__' && !addGroup.trim()) { flash('请先选择要加入的表（或直接进某个表添加）', 'err'); return; }
+    const targetGroup = active === '__all__' ? addGroup.trim() : active;
+    const gMeta = active === '__all__' ? groups.find((g) => g.name === targetGroup) : activeGroupMeta;
+    if (gMeta?.market && picked.market && picked.market !== gMeta.market) {
+      if (!window.confirm('表「' + targetGroup + '」仅限' + gMeta.market + '，而 ' + picked.name + ' 属' + picked.market + '。仍要加入？（之后此表会同时包含两个市场）')) return;
+    }
     const r = await addWatchlistItem({ symbol: picked.symbol, market: picked.market, group_name: targetGroup });
     if (!r.ok) { flash('添加失败：' + parseApiError(r.error), 'err'); return; }
     flash('已加入「' + targetGroup + '」');
@@ -250,20 +255,31 @@ export default function Watchlist() {
             {searching && <div className="absolute right-2 top-2.5 text-xs text-text-muted">搜索中...</div>}
             {cands.length > 0 && (
               <div className="absolute z-20 mt-1 w-full rounded border border-border bg-surface shadow-lg max-h-64 overflow-auto">
-                {cands.map((c) => (
-                  <button key={c.symbol + c.market} onClick={() => pick(c)}
-                    className="w-full text-left px-3 py-2 hover:bg-primary-50 flex items-center gap-2 text-sm">
-                    <span className="font-medium">{c.name}</span>
-                    <span className="text-xs text-text-muted font-number">{c.symbol}</span>
-                    <Badge variant={c.market === '港股' ? 'info' : 'default'}>{c.market}</Badge>
-                    <span className="ml-auto text-xs text-text-muted font-number">{c.price != null ? fmtNum(c.price, c.market === '港股' ? 3 : 2) : ''}</span>
-                  </button>
-                ))}
+                {cands.map((c) => {
+                  const targetMarket = active !== '__all__' ? activeGroupMeta?.market : (groups.find((g) => g.name === addGroup)?.market || '');
+                  const mis = targetMarket && c.market && c.market !== targetMarket;
+                  return (
+                    <button key={c.symbol + c.market} onClick={() => pick(c)}
+                      className={"w-full text-left px-3 py-2 flex items-center gap-2 text-sm " + (mis ? 'opacity-50 hover:bg-transparent' : 'hover:bg-primary-50')}>
+                      <span className={"font-medium " + (mis ? 'line-through decoration-text-muted/60' : '')}>{c.name}</span>
+                      <span className="text-xs text-text-muted font-number">{c.symbol}</span>
+                      <Badge variant={c.market === '港股' ? 'info' : 'default'}>{c.market}</Badge>
+                      <span className="ml-auto flex items-center gap-2">
+                        {mis && <span className="text-[10px] text-warning">非本表市场</span>}
+                        <span className="text-xs text-text-muted font-number">{c.price != null ? fmtNum(c.price, c.market === '港股' ? 3 : 2) : ''}</span>
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
           <select value={active === '__all__' ? addGroup : active} onChange={(e) => setAddGroup(e.target.value)} disabled={active !== '__all__'} className="rounded border border-border px-2 py-2 text-sm bg-white">
-            {active !== '__all__' ? <option value={active}>{active}</option> : (<><option value="">加入表…</option>{groups.map((g) => <option key={g.name} value={g.name}>{g.name}{g.market ? '（' + MARKET_LABEL[g.market] + '）' : ''}</option>)}<option value="__new__">＋ 新建表并添加…</option></>)}
+            {active !== '__all__' ? <option value={active}>{active}</option> : (<>
+              <option value="">加入表…</option>
+              {groups.length === 0 && <option value="默认">默认</option>}
+              {groups.map((g) => <option key={g.name} value={g.name}>{g.name}{g.market ? '（' + MARKET_LABEL[g.market] + '）' : ''}</option>)}
+            </>)}
           </select>
           <Button size="sm" disabled={!picked || (active === '__all__' && !addGroup)} onClick={addToPool}>加入 {picked ? picked.name : ''}</Button>
         </div>
