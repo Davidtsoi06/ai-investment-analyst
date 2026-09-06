@@ -12,7 +12,15 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
     // 主进程：HTTP 错误返回 {ok:false, status, error}；成功返回后端 JSON（可能含业务 ok 字段）
     const raw = (await window.backend.request(method, path, body)) as Record<string, unknown> | null;
     if (raw && raw.ok === false) {
-      return raw as unknown as ApiResult<T>; // 错误响应原样返回
+      // V1.1.3：业务错误 {ok:false, error|reason|detail} 统一映射到 ApiResult——
+      // 之前原样返回导致 error 为空、reason 落在顶层，页面兜底误报「后端不可用」
+      const e = raw as Record<string, unknown>;
+      const errText =
+        (typeof e.error === 'string' && e.error) ? e.error
+        : (typeof e.reason === 'string' && e.reason) ? e.reason
+        : (typeof e.detail === 'string' && e.detail) ? e.detail
+        : undefined;
+      return { ok: false, status: typeof e.status === 'number' ? e.status : 200, error: errText, data: raw as T };
     }
     return { ok: true, data: raw as T }; // 成功统一包装（与浏览器分支一致）
   }

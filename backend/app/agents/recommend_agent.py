@@ -582,7 +582,9 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
     scope_desc = ('我的股票池' + ('：' + '、'.join(groups) if groups else '（全部组）')) if scope_type == 'pool' else '全市场自动候选'
     if scope_type == 'pool' and len(candidates) < 5:
         # 用户决策：池太小不补蓝筹，直接提示
-        return {'ok': False, 'reason': f'您的股票池仅 {len(candidates)} 只（不足 5 只），请先到「我的股票池」添加观察股',
+        # error 与 reason 同文案：前端 api() 对 {ok:false} 响应只读 data/error 通道（reason 在顶层会丢失→误报后端不可用）
+        msg = f'您的股票池仅 {len(candidates)} 只（不足 5 只），请先到「我的股票池」添加观察股'
+        return {'ok': False, 'error': msg, 'reason': msg,
                 'date': today, 'mode': mode, 'scope': scope_type, 'cached': False,
                 'source': 'rules', 'items': [], 'blocked': [], 'errors': [],
                 'candidate_count': 0, 'pool_size': len(candidates), 'empty_reason': '股票池太小', 'intent': intent}
