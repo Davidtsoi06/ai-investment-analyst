@@ -219,6 +219,11 @@ def chat(messages: list[dict], model: str | None = None, temperature: float = 0.
         msg = f'DeepSeek 返回解析失败：{str(e)[:150]}（原始内容: {r.text[:150]}）'
         _record_ai_error(msg)
         raise RuntimeError(msg) from e
+    if not isinstance(content, str) or not content.strip():
+        # 模型返回空正文（如旧模型名被弃用/仅返回 reasoning_content）——显式报错而非静默返回空串
+        msg = f'DeepSeek 返回空内容（model={model or settings.model_chat}），可能是模型名失效，请更新配置'
+        _record_ai_error(msg)
+        raise RuntimeError(msg)
     # V1.1.0 N1：本地记录 tokens 用量 + 异步刷新余额缓存（低余额提示依据）
     try:
         usage = (body or {}).get('usage') or {}

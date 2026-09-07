@@ -316,8 +316,10 @@ def _call_ai(prompt: str) -> list[dict] | None:
     """调用 DeepSeek（reasoner）返回 JSON 数组；失败返回 None"""
     from ..services.llm_client import chat
     from ..config import settings
+    # 注意：曾用 model_reasoner（deepseek-reasoner），该模型当前返回空正文导致 AI 恒降级
+    # 规则引擎（实测 2026-09 起）。deepseek-chat 为验证可用模型，恢复 AI 推荐。
     text = chat([{'role': 'user', 'content': prompt}],
-                model=settings.model_reasoner, temperature=0.3, max_tokens=3000)
+                model=settings.model_chat, temperature=0.3, max_tokens=3000)
     fence = chr(96) * 3  # 移除可能的 markdown 代码围栏（围栏前后允许任意空白）
     text = re.sub(rf'^\s*{fence}json\s*', '', text.strip())
     text = re.sub(rf'{fence}\s*$', '', text)
