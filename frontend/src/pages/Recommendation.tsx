@@ -30,6 +30,11 @@ function isShort(r: RecommendItem): boolean {
   return r.rec_type === '短线' || r.rec_type === 'short';
 }
 
+/** V1.1.5B：数量补足条目（后端 logic 以【补足】开头：评分未达评估线，仅供数量参考） */
+function isFill(r: RecommendItem): boolean {
+  return !!(r.logic && String(r.logic).startsWith('【补足】'));
+}
+
 /** 风险等级 → 徽章配色：低=success / 中=info / 高=danger */
 function riskVariant(risk: string | null | undefined): 'success' | 'info' | 'danger' | 'default' {
   const r = (risk || '').trim();
@@ -90,9 +95,14 @@ function RecCard({ rec }: { rec: RecommendItem }) {
         <span className="text-xs text-text-muted font-number">{rec.symbol}</span>
         <Badge variant={rec.market === '港股' ? 'info' : 'default'}>{rec.market || 'A股'}</Badge>
         <Badge variant={short ? 'warning' : 'default'}>{REC_TYPE_LABEL[rec.rec_type] || rec.rec_type}</Badge>
-        {rec.tier === 'watch' && (
+        {rec.tier === 'watch' && !isFill(rec) && (
           <span title="观察清单：AI/规则认为可关注但把握一般，供您自行研究参考，不构成正式推荐">
             <Badge variant="default">观察级</Badge>
+          </span>
+        )}
+        {isFill(rec) && (
+          <span title="数量补足：该股票评分未达评估线（技术/估值分不足），仅为了满足您设定的推荐数量而列入，请务必自行甄别后再考虑">
+            <Badge variant="warning">⚠ 补足·未达评估线</Badge>
           </span>
         )}
       </div>
@@ -271,17 +281,24 @@ export default function Recommendation() {
     const d = r.data as TodayRecommendations | undefined;
     if (d && Array.isArray(d.items)) {
       const list = d.items;
-      const sc = list.filter(isShort).length;
-      const lc = list.length - sc;
+      const scList = list.filter(isShort);
+      const lcList = list.filter((x) => !isShort(x));
       const parts: string[] = [];
       if (intent.trim()) parts.push('范围：' + intent.trim());
       if (d.scope_desc) parts.push(d.scope_desc);
       if (mode === 'short') parts.push('仅短线');
       if (mode === 'long') parts.push('仅长线');
+      // V1.1.5B：分别统计 达标/补足，明确告知补足条目未达评估线
+      const fmtStat = (arr: RecommendItem[]) => {
+        const fillN = arr.filter(isFill).length;
+        return fillN > 0 ? arr.length + ' 只（评估达标 ' + (arr.length - fillN) + ' · 补足 ' + fillN + '）' : arr.length + ' 只';
+      };
+      const fillTotal = list.filter(isFill).length;
       setMsg({
         type: 'ok',
         text: (d.cached ? '已是最新（缓存）' : '已生成') + (parts.length ? '（' + parts.join(' · ') + '）' : '')
-          + '：短线 ' + sc + ' 条 · 长线 ' + lc + ' 条'
+          + '：短线 ' + fmtStat(scList) + ' · 长线 ' + fmtStat(lcList)
+          + (fillTotal > 0 ? '。⚠ 其中补足条目为凑足数量列入，评分未达评估线，仅供参考' : '')
           + (d.source === 'rules' ? '（规则引擎）' : d.source === 'ai_empty' ? '（AI 暂无合适标的）' : ''),
       });
     } else {

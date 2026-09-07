@@ -222,12 +222,18 @@ def _related_news(name: str, symbol: str, limit: int = 3) -> list[str]:
         conn.close()
 
 
-def _short_rule(symbol: str, name: str, market: str, quote, snap: dict) -> dict | None:
-    """规则引擎短线推荐。V1.1.0：评分 60+ = 推荐级(rec)；40~59 = 观察级(watch，用于数量补足)"""
+FILL_TAG = '【补足】'  # V1.1.5B：数量优先补足条目标记（评分未达评估线）
+
+
+def _short_rule(symbol: str, name: str, market: str, quote, snap: dict, fill: bool = False) -> dict | None:
+    """规则引擎短线推荐。V1.1.0：评分 60+ = 推荐级(rec)；40~59 = 观察级(watch)。
+    V1.1.5B：fill=True 时无视阈值构造「数量补足」条目（评分>0 未达线者，logic 带【补足】标记）"""
     score = score_short_term(snap)
-    if score < 40:
+    if score < 40 and not fill:
         return None
-    tier = 'rec' if score >= 60 else 'watch'
+    if fill and score <= 0:
+        return None
+    tier = 'watch' if fill else ('rec' if score >= 60 else 'watch')
     close = float(quote.price)
     entry_min = round(close * 0.99, 2)
     entry_max = round(close * 1.02, 2)
@@ -245,27 +251,32 @@ def _short_rule(symbol: str, name: str, market: str, quote, snap: dict) -> dict 
     if not signals:
         signals.append('技术形态偏强')
     risk = '低' if score >= 75 else ('中' if score >= 55 else '高')
+    logic = '；'.join(signals) + f'（规则评分 {score}）'
+    if fill:
+        logic = FILL_TAG + f'评分 {score} 未达评估线（40），为满足推荐数量补足列入，请自行甄别。' + logic
     return {
         'symbol': symbol, 'name': name, 'market': market, 'rec_type': '短线',
         'entry_min': entry_min, 'entry_max': entry_max,
         'stop_loss': stop_loss, 'target': target,
         'valuation_min': None, 'valuation_max': None,
         'confidence': min(90, 55 + score // 2),
-        'logic': '；'.join(signals) + f'（规则评分 {score}）',
+        'logic': logic,
         'risk_level': risk,
         'price': close,
         'tier': tier,
     }
 
 
-def _long_rule(symbol: str, name: str, market: str, quote, snap: dict) -> dict | None:
-    """规则引擎长线推荐（评分不足返回 None）"""
+def _long_rule(symbol: str, name: str, market: str, quote, snap: dict, fill: bool = False) -> dict | None:
+    """规则引擎长线推荐（评分不足返回 None；V1.1.5B fill=True 构造补足条目）"""
     pe = float(quote.pe or 0)
     pb = float(quote.pb or 0)
     score = score_long_term(snap, pe, pb)
-    if score < 45:
+    if score < 45 and not fill:
         return None
-    tier = 'rec' if score >= 65 else 'watch'  # V1.1.0：观察级用于数量补足
+    if fill and score <= 0:
+        return None
+    tier = 'watch' if fill else ('rec' if score >= 65 else 'watch')  # V1.1.0：观察级用于数量补足
     close = float(quote.price)
     valuation_min = round(close * 0.92, 2)
     valuation_max = round(close * 1.08, 2)
@@ -292,13 +303,16 @@ def _long_rule(symbol: str, name: str, market: str, quote, snap: dict) -> dict |
         logic_parts.append(f'PB {pb:.1f}')
     if not logic_parts:
         logic_parts.append('中长期形态稳健')
+    logic = '；'.join(logic_parts) + f'（规则评分 {score}）'
+    if fill:
+        logic = FILL_TAG + f'评分 {score} 未达评估线（45），为满足推荐数量补足列入，请自行甄别。' + logic
     return {
         'symbol': symbol, 'name': name, 'market': market, 'rec_type': '长线',
         'entry_min': None, 'entry_max': None,
         'stop_loss': None, 'target': None,
         'valuation_min': valuation_min, 'valuation_max': valuation_max,
         'confidence': min(85, 50 + score // 2),
-        'logic': '；'.join(logic_parts) + f'（规则评分 {score}）',
+        'logic': logic,
         'risk_level': risk,
         'price': close,
         'tier': tier,
@@ -481,6 +495,51 @@ def _tier_fill(entries: list[dict], target: int = 5, cap: int = 10) -> list[dict
     out = recs[:cap]
     need = max(0, min(target - len(out), len(watch), cap - len(out)))
     out += watch[:need]
+    return out
+
+
+def _fill_shortfall(passed: list[dict], enriched: list[dict], holdings: list[dict],
+                     mode: str, target: int, cap: int, assessed: list[dict] | None = None) -> list[dict]:
+    """V1.1.5B 数量优先：约束通过后，短线/长线各自仍不足 target 时，从未入选候选按
+    规则评分降序补足（logic 带【补足】标记、tier=watch 明确未达评估线）。
+    持仓中的股票不补；已在合并列表（assessed=merged，含被约束拦截者）出现的不补——
+    被拦截者已有明确原因（持仓/资金/风险），不再绕过约束重复展示。"""
+    held = {str(h.get('symbol')) for h in holdings}
+    assessed_keys = {(str(a.get('symbol')), a.get('rec_type')) for a in (assessed or [])}
+    out = list(passed)
+
+    def _count(rtype: str) -> int:
+        return sum(1 for e in out if e.get('rec_type') == rtype)
+
+    for rtype, make in (('短线', _short_rule), ('长线', _long_rule)):
+        if mode not in ('both', 'short' if rtype == '短线' else 'long'):
+            continue
+        if _count(rtype) >= target:
+            continue
+        taken = {(e.get('symbol'), e.get('rec_type')) for e in out} | assessed_keys
+        cands: list[tuple[float, dict]] = []
+        for c in enriched:
+            if (c['symbol'], rtype) in taken or c['symbol'] in held:
+                continue
+            try:
+                if rtype == '短线':
+                    s = float(score_short_term(c['snap']) or 0)
+                else:
+                    s = float(score_long_term(c['snap'], float(c['quote'].pe or 0), float(c['quote'].pb or 0)) or 0)
+            except Exception:  # noqa: BLE001
+                continue
+            if s > 0:
+                cands.append((s, c))
+        cands.sort(key=lambda x: -x[0])
+        for _s, c in cands:
+            if _count(rtype) >= target or _count(rtype) >= cap:
+                break
+            try:
+                e = make(c['symbol'], c['name'], c['market'], c['quote'], c['snap'], fill=True)
+            except Exception:  # noqa: BLE001
+                continue
+            if e:
+                out.append(e)
     return out
 
 
@@ -683,6 +742,10 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
     macro_passed, macro_blocked = _macro_constraint(result['passed'])
     result['passed'] = macro_passed
     result['blocked'] = result['blocked'] + macro_blocked
+
+    # 4.5) V1.1.5B 数量优先：约束后各类型仍不足档位下限时，从未入选候选按评分
+    #      补足到下限（logic 带【补足】标记 + tier=watch，明确未达评估线，仅供参考）
+    result['passed'] = _fill_shortfall(result['passed'], enriched, holdings, mode, t_min, t_max, assessed=merged)
 
     # 最终来源语义（V1.0.9 三态）：
     # ai = AI 产出条目；rules = AI 不可用降级规则产出（或仅规则条目）；ai_empty = AI 正常但无合适标的
