@@ -114,6 +114,11 @@ def sync_now() -> dict:
         )
         conn.commit()
         logger.info('持仓同步完成：%d 条持仓 / %d 个账户', len(snapshot.holdings), len(snapshot.accounts))
+        # V1.1.5：同步后立即用实时行情刷新现价（快照价仅作首次落库兜底）
+        try:
+            refresh_holdings_prices()
+        except Exception:  # noqa: BLE001
+            pass
         return {
             'ok': True,
             'mode': mode,
@@ -205,3 +210,63 @@ def register_hourly_sync() -> None:
 
     add_cron_job(_job, hour='*', minute=5, job_id='portfolio_hourly_sync')
     logger.info('已注册每小时持仓同步任务（快照模式）')
+
+
+# ---------------- V1.1.5：持仓现价实时刷新 ----------------
+
+def refresh_holdings_prices() -> dict:
+    """V1.1.5：持仓现价实时刷新（快照/手动来源统一）。
+    快照文件只提供 代码/名称/数量/成本；现价由行情数据源实时获取并回写 current_price
+    （行情失败保留原值不覆盖，作为 last-known 兜底）。"""
+    from concurrent.futures import ThreadPoolExecutor
+    from ..data_sources.market.data_fusion import data_fusion
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            'SELECT id, symbol, name, market FROM holdings ORDER BY market, symbol'
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return {'updated': 0, 'total': 0}
+
+    def _one(row: dict):
+        try:
+            q = data_fusion.get_quote(row['symbol'], row['market'])
+            if q is not None and q.price:
+                return row['id'], float(q.price)
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=min(6, max(1, len(rows)))) as ex:
+        results = [r for r in ex.map(_one, rows) if r is not None]
+    if results:
+        conn = get_connection()
+        try:
+            now = utc_now()
+            for rid, price in results:
+                conn.execute(
+                    'UPDATE holdings SET current_price = ?, updated_at = ? WHERE id = ?',
+                    (price, now, rid),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info('持仓现价刷新: %d/%d 只更新', len(results), len(rows))
+    return {'updated': len(results), 'total': len(rows)}
+
+
+def register_price_refresh_job() -> None:
+    """注册持仓现价每 5 分钟自动刷新（v1.1.5；行情失败静默保留原值）"""
+    from .scheduler import add_interval_job
+
+    def _job() -> None:
+        try:
+            refresh_holdings_prices()
+        except Exception as e:  # noqa: BLE001
+            logger.error('定时持仓现价刷新失败: %s', e)
+
+    add_interval_job(_job, minutes=5, job_id='holdings_price_refresh')
+    logger.info('已注册每 5 分钟持仓现价刷新任务')

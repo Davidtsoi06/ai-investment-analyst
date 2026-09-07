@@ -15,7 +15,7 @@ from .config import settings
 from .models.database import init_db
 from .services.logger import get_app_logger
 from .services.scheduler import start_scheduler, stop_scheduler
-from .services.portfolio_sync import sync_now, portfolio_status, register_hourly_sync, get_mode, set_mode, upsert_manual_holding, delete_manual_holding
+from .services.portfolio_sync import sync_now, portfolio_status, register_hourly_sync, get_mode, set_mode, upsert_manual_holding, delete_manual_holding, register_price_refresh_job, refresh_holdings_prices
 from .services.notification import send_notification, list_notifications
 from .services.settings_service import get_setting, set_setting
 from .services.trading_calendar import is_trading_day
@@ -30,6 +30,7 @@ async def lifespan(_app: FastAPI):
     init_db()
     start_scheduler()
     register_hourly_sync()
+    register_price_refresh_job()
     register_news_jobs()
     from .data_sources.news.overseas_fetcher import register_overseas_jobs  # noqa: E402
     register_overseas_jobs()
@@ -497,6 +498,13 @@ def portfolio_holding_delete(symbol: str = Query(..., min_length=1), market: str
     """删除手动持仓（按代码+市场）"""
     require_token(x_backend_token)
     return delete_manual_holding(symbol, market)
+
+
+@app.post("/api/portfolio/refresh-quotes")
+def portfolio_refresh_quotes_api(x_backend_token: str = Header(default="")):
+    """手动触发持仓现价刷新（V1.1.5；行情失败保留原值）"""
+    require_token(x_backend_token)
+    return refresh_holdings_prices()
 
 
 @app.get("/api/portfolio/overview")

@@ -67,9 +67,22 @@ def _load_holding_rows() -> list[dict]:
         conn.close()
 
 
+def _load_pool_rows() -> list[dict]:
+    """我的股票池（watchlist）+ 追踪列表（tracking）：名称/代码/市场"""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            'SELECT symbol, name, market FROM watchlist '
+            'UNION SELECT symbol, name, market FROM tracking'
+        ).fetchall()
+        return [dict(r) for r in rows if r['symbol'] and r['name']]
+    finally:
+        conn.close()
+
+
 def _extract_symbols(question: str, allow_external: bool = False) -> list[dict]:
-    """识别问题中的股票：6 位 A 股代码 / 5 位港股代码 / 持仓名称 / 常见股票名称；
-    allow_external=True 且本地无命中时，主动搜索外部行情源（东财 suggest，#8）"""
+    """识别问题中的股票：6 位 A 股代码 / 5 位港股代码 / 持仓名称 / 我的股票池与追踪 /
+    常见股票名称；allow_external=True 且本地无命中时，主动搜索外部行情源（多源，#8）"""
     found: list[dict] = []
     seen: set[tuple[str, str]] = set()
 
@@ -84,8 +97,10 @@ def _extract_symbols(question: str, allow_external: bool = False) -> list[dict]:
     for code in re.findall(r'(?<!\d)\d{5}(?!\d)', question):
         _add(code, '', '港股')
 
-    holding_names = {h['name']: h for h in _load_holding_rows()}
-    for name, h in holding_names.items():
+    # v1.1.5：识别范围覆盖 持仓 / 我的股票池 / 追踪 的本地标的（不依赖外部搜索）
+    local_rows = _load_holding_rows() + _load_pool_rows()
+    local_names = {h['name']: h for h in local_rows}
+    for name, h in local_names.items():
         if name and name in question:
             _add(h['symbol'], h['name'], h['market'])
     for name, code in COMMON_STOCKS.items():

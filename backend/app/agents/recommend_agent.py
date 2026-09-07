@@ -307,6 +307,12 @@ def _long_rule(symbol: str, name: str, market: str, quote, snap: dict) -> dict |
 
 # ---------------- AI 生成与解析 ----------------
 
+def _target_range(profile: dict) -> tuple[int, int]:
+    """推荐数量档位（V1.1.5，用户决策）：保守 3~5 / 稳健 5~8 / 激进 8~10；未知档按稳健"""
+    return {'保守型': (3, 5), '稳健型': (5, 8), '激进型': (8, 10)}.get(
+        (profile.get('risk_tolerance') or '').strip() or '稳健型', (5, 8))
+
+
 def _ai_configured() -> bool:
     from ..services.settings_service import ai_key_configured
     return ai_key_configured()
@@ -319,7 +325,7 @@ def _call_ai(prompt: str) -> list[dict] | None:
     # 注意：曾用 model_reasoner（deepseek-reasoner），该模型当前返回空正文导致 AI 恒降级
     # 规则引擎（实测 2026-09 起）。deepseek-chat 为验证可用模型，恢复 AI 推荐。
     text = chat([{'role': 'user', 'content': prompt}],
-                model=settings.model_chat, temperature=0.3, max_tokens=3000)
+                model=settings.model_chat, temperature=0.3, max_tokens=6000)
     fence = chr(96) * 3  # 移除可能的 markdown 代码围栏（围栏前后允许任意空白）
     text = re.sub(rf'^\s*{fence}json\s*', '', text.strip())
     text = re.sub(rf'{fence}\s*$', '', text)
@@ -381,7 +387,8 @@ def _sanitize_ai_item(item: dict, candidates_by_symbol: dict) -> dict | None:
     }
 
 
-def _ai_entries(candidates: list[dict], mode: str = 'both') -> tuple[list[dict], str]:
+def _ai_entries(candidates: list[dict], mode: str = 'both',
+                 target_min: int = 5, target_max: int = 10) -> tuple[list[dict], str]:
     """AI 生成短线/长线条目（V1.1.0 mode 可分开生成）。AI 条目均为推荐级 tier=rec。
     返回状态：'ai'=AI成功且有条目；'ai_empty'=AI成功但认为无合适标的；'rules'=未配置/调用失败降级"""
     if not _ai_configured():
@@ -416,7 +423,7 @@ def _ai_entries(candidates: list[dict], mode: str = 'both') -> tuple[list[dict],
     ai_ok = True
     try:
         if mode in ('short', 'both'):
-            short_raw = _call_ai(build_short_prompt(short_cands))
+            short_raw = _call_ai(build_short_prompt(short_cands, target_min, target_max))
             for it in short_raw or []:
                 it['rec_type'] = '短线'
                 e = _sanitize_ai_item(it, candidates_by_symbol)
@@ -424,7 +431,7 @@ def _ai_entries(candidates: list[dict], mode: str = 'both') -> tuple[list[dict],
                     e['tier'] = 'rec' if (e.get('confidence') or 0) >= 60 else 'watch'
                     entries.append(e)
         if mode in ('long', 'both'):
-            long_raw = _call_ai(build_long_prompt(long_cands))
+            long_raw = _call_ai(build_long_prompt(long_cands, target_min, target_max))
             for it in long_raw or []:
                 it['rec_type'] = '长线'
                 e = _sanitize_ai_item(it, candidates_by_symbol)
@@ -655,7 +662,9 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
                 rule_entries.append(l)
 
     # 2) AI 生成（失败降级规则；mode 独立）
-    ai_entries, source = _ai_entries(enriched, mode)
+    # V1.1.5 数量档位（按画像风险承受）：保守 3~5 / 稳健 5~8 / 激进 8~10
+    t_min, t_max = _target_range(profile)
+    ai_entries, source = _ai_entries(enriched, mode, t_min, t_max)
     if ai_entries:
         by_key = {(e['symbol'], e['rec_type']): e for e in ai_entries}
         for r in rule_entries:
@@ -664,8 +673,8 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
     else:
         merged = rule_entries
 
-    # 2.5) V1.1.4 数量补足：短线/长线各自不足 5 时用观察级补足（目标每类 5~10 只）
-    merged = _tier_fill_by_type(merged)
+    # 2.5) V1.1.5 数量补足：短线/长线各自按画像档位补足（不足 target 用观察级补齐）
+    merged = _tier_fill_by_type(merged, target=t_min, cap=t_max)
 
     # 3) 约束过滤
     result = apply_constraints(merged, profile, holdings)

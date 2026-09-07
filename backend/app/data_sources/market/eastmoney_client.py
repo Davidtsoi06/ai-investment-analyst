@@ -11,7 +11,7 @@ KLINE_URL = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
 
 def _secid(market: str, symbol: str) -> str:
     if market == 'A股':
-        # 沪市：6xx 股票 / 9xx B股 / 5xx ETF；其余（0/1/2/3 开头）为深市
+        # 沪市：6xx 股票 / 9xx B股 / 5xx ETF → 1.xxx；北交所 920/83/87/43 与深市其余 → 0.xxx
         return f'1.{0}'.format(symbol) if symbol.startswith(('6', '9', '5')) else f'0.{0}'.format(symbol)
     if market == '港股':
         return f'116.{0}'.format(symbol)

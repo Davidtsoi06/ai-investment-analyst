@@ -4,12 +4,12 @@
 输出要求：严格 JSON 数组，便于解析；字段缺失时调用方以规则引擎结果兜底。
 """
 
-SHORT_PROMPT = """你是资深 A 股/港股短线交易分析师。基于以下候选股票的技术指标、量能与相关资讯，选出 5~10 只短线机会（请务必给足 5 只以上、最多 10 只），输出**入场区间 / 止损 / 目标价 / 置信度 / 逻辑 / 风险等级**。
+SHORT_PROMPT = """你是资深 A 股/港股短线交易分析师。基于以下候选股票的技术指标、量能与相关资讯，选出 {target_min}~{target_max} 只短线机会（请务必给足 {target_min} 只以上、最多 {target_max} 只），输出**入场区间 / 止损 / 目标价 / 置信度 / 逻辑 / 风险等级**。
 
 筛选原则：
 - 优先：放量突破、MACD/KDJ 金叉、均线多头、量比放大、RSI 处于 45~75 强势区
 - 排除：破位下行、缩量阴跌、RSI 超买（>80）或超卖趋势未反转
-- 数量要求：目标 5~10 只——候选 10 只以上时输出 10 只；候选 5~10 只时尽量全给（宁可把把握一般的也列出并降低 confidence，也不要少给）；候选不足 5 只时可全部给出
+- 数量要求（重要）：必须输出 {target_min}~{target_max} 只。候选足够时**严禁少于 {target_min} 只**：宁可把把握不足的也列入（confidence 给 40~55 并诚实说明理由），也不许少给；候选多于 {target_max} 只时优先保留最有把握的 {target_max} 只；仅当候选总数不足 {target_min} 只时才可全部列出
 - confidence：越有把握给越高（40~100）；相对把握较低的也给（40 分档），供用户作为观察候选参考；每只都必须给逻辑
 
 输出格式：严格 JSON 数组，不要任何其他文字，例如：
@@ -30,7 +30,7 @@ LONG_PROMPT = """你是资深 A 股/港股价值投资分析师。基于以下�
 筛选原则：
 - 优先：估值合理偏低（PE/PB 适中）、周/月线趋势向上、中期走势稳健
 - 排除：估值过高、趋势持续走弱、近期暴涨透支
-- 数量要求：目标 5~10 只——候选 10 只以上时输出 10 只；候选 5~10 只时尽量全给（宁可把把握一般的也列出并降低 confidence，也不要少给）；候选不足 5 只时可全部给出
+- 数量要求（重要）：必须输出 {target_min}~{target_max} 只。候选足够时**严禁少于 {target_min} 只**：宁可把把握不足的也列入（confidence 给 40~55 并诚实说明理由），也不许少给；候选多于 {target_max} 只时优先保留最有把握的 {target_max} 只；仅当候选总数不足 {target_min} 只时才可全部列出
 - confidence：越有把握给越高（40~100）；相对把握较低的也给（40 分档），供用户作观察候选参考；每只都必须给逻辑
 
 输出格式：严格 JSON 数组，不要任何其他文字，例如：
@@ -54,9 +54,13 @@ def _fmt_candidates(candidates: list[dict]) -> str:
     return chr(10).join(lines)
 
 
-def build_short_prompt(candidates: list[dict]) -> str:
-    return SHORT_PROMPT.format(candidates=_fmt_candidates(candidates))
+def build_short_prompt(candidates: list[dict], target_min: int = 5, target_max: int = 10) -> str:
+    """V1.1.5：数量目标按画像档位传入（保守 3~5 / 稳健 5~8 / 激进 8~10）"""
+    return SHORT_PROMPT.format(candidates=_fmt_candidates(candidates),
+                               target_min=target_min, target_max=target_max)
 
 
-def build_long_prompt(candidates: list[dict]) -> str:
-    return LONG_PROMPT.format(candidates=_fmt_candidates(candidates))
+def build_long_prompt(candidates: list[dict], target_min: int = 5, target_max: int = 10) -> str:
+    """V1.1.5：数量目标按画像档位传入（保守 3~5 / 稳健 5~8 / 激进 8~10）"""
+    return LONG_PROMPT.format(candidates=_fmt_candidates(candidates),
+                              target_min=target_min, target_max=target_max)

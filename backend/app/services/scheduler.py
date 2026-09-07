@@ -22,6 +22,12 @@ def stop_scheduler() -> None:
         logger.info('调度器已停止')
 
 
+def add_interval_job(func, minutes: int, job_id: str | None = None) -> None:
+    """注册间隔任务（如持仓现价每 5 分钟刷新）"""
+    scheduler.add_job(func, 'interval', minutes=minutes, id=job_id, replace_existing=True)
+    logger.info('已注册定时任务 %s: 每 %d 分钟', job_id or func.__name__, minutes)
+
+
 def add_cron_job(func, hour: int, minute: int, job_id: str | None = None,
                   day: int | None = None, day_of_week: str | None = None) -> None:
     """注册 cron 任务；day=每月几号（1-31），day_of_week=每周几（mon..sun / 0-6）"""
