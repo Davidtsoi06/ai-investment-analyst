@@ -477,6 +477,21 @@ def _tier_fill(entries: list[dict], target: int = 5, cap: int = 10) -> list[dict
     return out
 
 
+def _tier_fill_by_type(entries: list[dict], target: int = 5, cap: int = 10) -> list[dict]:
+    """V1.1.4：短线/长线**分开**补足——每类推荐级不足 target 时用该类的观察级补到 target（每类上限 cap），
+    保证"短线 5~10 只 + 长线 5~10 只"（旧逻辑按总量补足，短 3 + 长 4 = 7 已达标导致各类型不足 5）"""
+    out: list[dict] = []
+    for rtype in ('短线', '长线'):
+        part = [e for e in entries if e.get('rec_type') == rtype]
+        if part:
+            out.extend(_tier_fill(part, target, cap))
+    # 防御：无类型条目原样保留
+    for e in entries:
+        if e.get('rec_type') not in ('短线', '长线'):
+            out.append(e)
+    return out
+
+
 def _save_entries(entries: list[dict], today: str, mode: str = 'both') -> int:
     """保存当日推荐（V1.1.0：mode 区分短线/长线独立覆盖；tier rec/watch 落库）"""
     conn = get_connection()
@@ -649,8 +664,8 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
     else:
         merged = rule_entries
 
-    # 2.5) V1.1.0 数量补足（方案 C：推荐级不足 5 时用观察级补到 5+）
-    merged = _tier_fill(merged)
+    # 2.5) V1.1.4 数量补足：短线/长线各自不足 5 时用观察级补足（目标每类 5~10 只）
+    merged = _tier_fill_by_type(merged)
 
     # 3) 约束过滤
     result = apply_constraints(merged, profile, holdings)
