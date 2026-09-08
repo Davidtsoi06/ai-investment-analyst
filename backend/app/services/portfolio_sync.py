@@ -72,8 +72,13 @@ def portfolio_status() -> dict:
         def _count(src: str) -> int:
             row = conn.execute('SELECT COUNT(*) AS n FROM holdings WHERE source = ?', (src,)).fetchone()
             return int(row['n'] or 0)
+        from .finance_reader import finance_db_path
+        fdb = finance_db_path()
         return {
             'mode': mode,
+            'source': 'finance_db' if fdb is not None else ('snapshot' if snap_file.exists() else 'none'),
+            'finance_db_detected': fdb is not None,
+            'finance_db': str(fdb) if fdb else None,
             'snapshot_detected': snap_file.exists(),
             'snapshot_dir': str(folder),
             'snapshot_modified_at': datetime.fromtimestamp(snap_file.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
@@ -85,14 +90,28 @@ def portfolio_status() -> dict:
 
 
 def sync_now() -> dict:
-    """执行同步：读取快照文件，全量替换 source=portfolio_app 的持仓 + 更新快照缓存"""
+    """V1.1.7 执行同步：主源=理财软件 finance.db 直读（只读），兜底=快照文件；
+    全量替换 source=portfolio_app 的持仓 + 更新账户/净值缓存"""
     mode = get_mode()
     if mode != 'snapshot':
-        return {'ok': False, 'reason': '当前为手动录入模式，请在设置中切换为「快照文件」后再同步'}
-    snapshot = read_snapshot()
+        return {'ok': False, 'reason': '当前为手动录入模式，请在设置中切换为「理财软件直读」后再同步'}
+    # 1) finance.db 直读（主源）
+    from .finance_reader import read_finance_portfolio
+    fb = read_finance_portfolio()
+    snapshot = fb.get('snapshot')
+    source = fb.get('source') or 'none'
+    skipped = fb.get('skipped') or []
     if snapshot is None:
-        logger.warning('持仓同步：未检测到快照文件')
-        return {'ok': False, 'reason': '未检测到快照文件 portfolio_snapshot.json。请在「个人理财投资软件」设置 → AI 配置 → 导出文件夹，指向本软件数据目录，并触发一次快照导出'}
+        # 2) 快照文件兜底（旧版理财软件导出仍可用）
+        legacy = read_snapshot()
+        if legacy is not None:
+            snapshot = legacy
+            source = 'snapshot'
+        else:
+            reason = fb.get('error') or '未检测到任何持仓数据来源'
+            logger.warning('持仓同步失败：%s', reason)
+            return {'ok': False, 'reason': reason,
+                    'legacy_reason': '（也未见旧快照文件，可切换「手动录入」模式直接维护持仓）'}
 
     conn = get_connection()
     try:
@@ -113,8 +132,8 @@ def sync_now() -> dict:
             (SNAPSHOT_KEY, json.dumps(snapshot.to_dict(), ensure_ascii=False), now),
         )
         conn.commit()
-        logger.info('持仓同步完成：%d 条持仓 / %d 个账户', len(snapshot.holdings), len(snapshot.accounts))
-        # V1.1.5：同步后立即用实时行情刷新现价（快照价仅作首次落库兜底）
+        logger.info('持仓同步完成：%d 条持仓 / %d 个账户（来源 %s）', len(snapshot.holdings), len(snapshot.accounts), source)
+        # V1.1.5：同步后立即用实时行情刷新现价（来源价仅作首次落库兜底）
         try:
             refresh_holdings_prices()
         except Exception:  # noqa: BLE001
@@ -122,6 +141,8 @@ def sync_now() -> dict:
         return {
             'ok': True,
             'mode': mode,
+            'source': source,
+            'skipped': skipped,
             'holdings': len(snapshot.holdings),
             'accounts': len(snapshot.accounts),
             'transactions': len(snapshot.transactions),

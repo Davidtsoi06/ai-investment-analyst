@@ -74,14 +74,16 @@ export default function Portfolio() {
       flash('err', '同步失败：' + parseApiError(r.error));
       return;
     }
-    const d = r.data as { ok?: boolean; reason?: string; holdings?: number; net_worth?: NetWorth | null; synced_at?: string };
+    const d = r.data as { ok?: boolean; reason?: string; source?: string; skipped?: string[]; holdings?: number; net_worth?: NetWorth | null; synced_at?: string };
     if (d?.ok === false) {
       flash('err', d.reason || '同步失败');
       return;
     }
-    flash('ok', '同步完成：持仓 ' + (typeof d?.holdings === 'number' ? d.holdings : '—') + ' 只'
+    const srcTxt = d?.source === 'finance_db' ? '（理财软件数据库直读）' : d?.source === 'snapshot' ? '（快照文件兜底）' : '';
+    const skipTxt = (d?.skipped && d.skipped.length > 0) ? '；跳过：' + d.skipped.slice(0, 3).join('、') : '';
+    flash('ok', '同步完成' + srcTxt + '：持仓 ' + (typeof d?.holdings === 'number' ? d.holdings : '—') + ' 只'
       + (d?.net_worth?.net_worth != null ? ' · 净值 ' + fmtMoney(d.net_worth.net_worth) : '')
-      + (d?.synced_at ? ' · ' + String(d.synced_at).slice(0, 16) : ''));
+      + (d?.synced_at ? ' · ' + String(d.synced_at).slice(0, 16) : '') + skipTxt);
     await Promise.all([load(), loadStatus()]);
   };
 
@@ -90,7 +92,7 @@ export default function Portfolio() {
     const okGo = window.confirm(
       m === 'manual'
         ? '切换到「手动录入」后将清理此前从快照同步的持仓（可随时切回并重新同步）。继续？'
-        : '切换到「快照文件」模式后，持仓来自理财软件导出的快照文件；已有手动录入保留（再次切回手动可恢复）。继续？',
+        : '切换到「理财软件直读」模式后，持仓自动来自本机理财软件数据库（缺失时回退快照）；已有手动录入保留（再次切回手动可恢复）。继续？',
     );
     if (!okGo) return;
     setSwitching(true);
@@ -167,7 +169,7 @@ export default function Portfolio() {
         <div>
           <h1 className="text-xl font-bold text-primary-900">持仓总览</h1>
           <p className="text-xs text-text-muted mt-1">
-            {isManual ? '手动录入模式：直接添加/编辑/删除持仓' : '快照文件模式：从个人理财软件导出的持仓快照同步（每小时自动）'}
+            {isManual ? '手动录入模式：直接添加/编辑/删除持仓' : '自动直读模式：读取本机理财软件数据库（只读，每小时自动同步；缺失时回退快照文件）'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -189,7 +191,10 @@ export default function Portfolio() {
         <div className="flex flex-wrap items-center gap-2 mb-2">
           <h2 className="font-bold text-sm">持仓数据来源</h2>
           {status ? (
-            isManual ? <Badge variant="warning">手动录入</Badge> : <Badge variant="info">快照文件</Badge>
+            isManual ? <Badge variant="warning">手动录入</Badge>
+              : status.source === 'finance_db' ? <Badge variant="success">理财软件直读</Badge>
+              : status.source === 'snapshot' ? <Badge variant="info">快照文件（兜底）</Badge>
+              : <Badge variant="danger">未检测到来源</Badge>
           ) : (
             <Badge>检测中...</Badge>
           )}
@@ -200,8 +205,8 @@ export default function Portfolio() {
             disabled={switching}
             className={'rounded-lg border p-3 text-left text-sm transition ' + (!isManual ? 'border-primary-500 bg-primary-50' : 'border-border hover:border-primary-300')}
           >
-            <div className="font-medium text-primary-900">☁️ 快照文件（理财软件同步）</div>
-            <p className="text-xs text-text-secondary mt-1">读取「个人理财投资软件」导出的 portfolio_snapshot.json（v1.10.15+ 自动导出），含持仓/账户/交易/净值，每小时自动同步。</p>
+            <div className="font-medium text-primary-900">💾 理财软件数据库直读（推荐）</div>
+            <p className="text-xs text-text-secondary mt-1">自动读取本机「个人理财投资软件」持仓数据库（只读不改动），含持仓/账户现金/净值；找不到时自动回退快照文件；与理财软件同机即用、每小时自动同步。</p>
             {!isManual && status && (
               <p className="text-xs text-text-muted mt-1">
                 {status.snapshot_detected

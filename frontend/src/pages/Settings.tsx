@@ -60,7 +60,7 @@ export default function Settings() {
   // 持仓数据来源模式（手动录入 / 快照文件）
   const [pfMode, setPfMode] = useState<string>('snapshot');
   const [pfLoadedMode, setPfLoadedMode] = useState<string | null>(null);
-  const [pfStatus, setPfStatus] = useState<{ snapshot_detected?: boolean; snapshot_dir?: string | null; snapshot_modified_at?: string | null } | null>(null);
+  const [pfStatus, setPfStatus] = useState<{ source?: string; finance_db?: string | null; snapshot_detected?: boolean; snapshot_dir?: string | null; snapshot_modified_at?: string | null } | null>(null);
 
   useEffect(() => {
     if (!window.updater) return;
@@ -397,10 +397,10 @@ export default function Settings() {
             className={'rounded-lg border p-3 text-left text-sm transition ' + (pfMode === 'snapshot' ? 'border-primary-500 bg-primary-50' : 'border-border hover:border-primary-300')}
           >
             <div className={'font-medium ' + (pfMode === 'snapshot' ? 'text-primary-700' : 'text-primary-900')}>
-              {pfMode === 'snapshot' ? '☑' : '☐'} 快照文件（推荐）
+              {pfMode === 'snapshot' ? '☑' : '☐'} 理财软件数据库直读（推荐）
             </div>
             <p className="text-xs text-text-secondary mt-1 leading-5">
-              读取「个人理财投资软件」v1.10.15+ 自动导出的 portfolio_snapshot.json，含持仓/账户/交易/净值，每小时自动同步，无需重复录入。
+              自动读取本机「个人理财投资软件」的持仓数据库（只读，不改动理财软件任何数据），含持仓/账户现金/净值，每小时自动同步；找不到时自动回退读取快照文件。与理财软件装在同一台电脑即用，无需任何导出配置。
             </p>
           </button>
           <button
@@ -418,13 +418,14 @@ export default function Settings() {
         {pfMode === 'snapshot' ? (
           <div className="mt-3 rounded border border-border bg-bg-secondary/60 px-3 py-2">
             <p className="text-xs text-text-secondary leading-5">
-              快照目录：<span className="font-mono" id="portfolio-dir">读取中...</span>
+              自动来源：<span className="font-mono">{pfStatus && pfStatus.source === 'finance_db'
+                ? '理财软件数据库 ✓（' + (pfStatus.finance_db || '') + '）'
+                : pfStatus && pfStatus.source === 'snapshot'
+                  ? '快照文件 ✓（' + (pfStatus.snapshot_dir || '') + '）'
+                  : pfStatus && pfStatus.source === 'none' ? '未检测到任何来源（见下方说明）' : '检测中...'}</span>
             </p>
             <p className="text-xs text-text-muted mt-1">
-              请将「个人理财投资软件」设置 → AI 配置 → 导出文件夹，指向以上目录，并在理财软件中导出一次持仓快照。
-              {pfStatus && pfStatus.snapshot_detected
-                ? '（已检测到快照文件，更新于 ' + (pfStatus.snapshot_modified_at || '—') + '）'
-                : '（当前尚未检测到快照文件）'}
+              理财软件需与本软件安装在同一台电脑。同步失败的详细原因会在「持仓总览 → 同步持仓」时直接提示；也可切换到「手动录入」自行维护。
             </p>
           </div>
         ) : (

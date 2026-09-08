@@ -854,8 +854,12 @@ export interface PortfolioSnapshot {
 }
 
 export interface PortfolioStatus {
-  /** 持仓数据模式：snapshot（快照文件）/ manual（手动录入） */
+  /** 持仓数据模式：snapshot（理财软件直读/快照）/ manual（手动录入） */
   mode: string;
+  /** V1.1.7 自动来源：finance_db（理财软件数据库直读）/ snapshot（快照文件兜底）/ none */
+  source?: 'finance_db' | 'snapshot' | 'none';
+  finance_db_detected?: boolean;
+  finance_db?: string | null;
   snapshot_detected?: boolean;
   snapshot_dir?: string | null;
   snapshot_modified_at?: string | null;
