@@ -59,6 +59,31 @@ def source_clause(mode: str | None = None) -> tuple[str, list]:
     return "source = ?", [src]
 
 
+def _norm_networth(nw: dict | None) -> dict | None:
+    """净值字段规范化：camelCase(理财软件/缓存历史) → 前端契约 snake_case"""
+    if not isinstance(nw, dict):
+        return nw
+    return {
+        'date': nw.get('date'),
+        'total_cash': nw.get('total_cash', nw.get('totalCash')),
+        'total_investments': nw.get('total_investments', nw.get('totalInvestments')),
+        'net_worth': nw.get('net_worth', nw.get('netWorth')),
+    }
+
+
+def normalize_snapshot_dict(d: dict) -> dict:
+    """V1.1.8：缓存快照统一为前端契约字段（snake_case）。
+    兼容历史 camelCase 缓存与理财软件导出文件（无需用户重新同步）。"""
+    out = dict(d or {})
+    nw = out.get('net_worth')
+    if isinstance(nw, dict):
+        out['net_worth'] = _norm_networth(nw)
+    hist = out.get('net_worth_history') or []
+    if hist and isinstance(hist[0], dict):
+        out['net_worth_history'] = [_norm_networth(x) for x in hist]
+    return out
+
+
 # ---------------- 快照同步 ----------------
 
 def portfolio_status() -> dict:
@@ -126,10 +151,10 @@ def sync_now() -> dict:
                 h.code, h.name, h.market, h.currency, h.quantity, h.cost_price, h.current_price,
                 now, now, now,
             ))
-        # 快照（账户/交易/净值）存系统设置
+        # 快照（账户/交易/净值）存系统设置（V1.1.8：字段规范化 snake_case，前端契约）
         conn.execute(
             'INSERT OR REPLACE INTO system_settings (key, value, updated_at) VALUES (?, ?, ?)',
-            (SNAPSHOT_KEY, json.dumps(snapshot.to_dict(), ensure_ascii=False), now),
+            (SNAPSHOT_KEY, json.dumps(normalize_snapshot_dict(snapshot.to_dict()), ensure_ascii=False), now),
         )
         conn.commit()
         logger.info('持仓同步完成：%d 条持仓 / %d 个账户（来源 %s）', len(snapshot.holdings), len(snapshot.accounts), source)

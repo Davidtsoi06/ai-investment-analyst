@@ -529,6 +529,10 @@ def portfolio_overview_api(x_backend_token: str = Header(default="")):
     finally:
         conn.close()
     snapshot = _json.loads(row['value']) if row else None
+    if snapshot:
+        # V1.1.8：字段规范化（兼容历史 camelCase 缓存，无需重新同步）
+        from .services.portfolio_sync import normalize_snapshot_dict
+        snapshot = normalize_snapshot_dict(snapshot)
     return {
         "mode": mode,
         "holdings": holdings,
