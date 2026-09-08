@@ -719,11 +719,21 @@ def stock_search_api(kw: str = Query(..., min_length=1), x_backend_token: str = 
 
 @app.post("/api/pool/analyze")
 def pool_analyze_api(data: PoolAnalyzeIn | None = None, x_backend_token: str = Header(default="")):
-    """我的股票池体检（V1.1.0 M1）：高低位/RSI/趋势/结论；groups 空=全部组"""
+    """我的股票池体检（V1.1.0 M1）：高低位/RSI/趋势/结论/资讯/建议；groups 空=全部组"""
     require_token(x_backend_token)
     from .services.pool_service import analyze_pool
     groups = [str(g).strip() for g in ((data.groups if data else None) or []) if str(g).strip()] or None
     return analyze_pool(groups)
+
+
+@app.post("/api/pool/analyze-ai")
+def pool_analyze_ai_api(data: PoolAnalyzeIn | None = None, x_backend_token: str = Header(default="")):
+    """股票池 AI 深度点评（V1.1.6）：一次 AI 调用对全池输出 买入/持有/减仓/观望 + 理由；
+    无 Key/失败返回 ok:false + reason（前端回落规则建议）"""
+    require_token(x_backend_token)
+    from .services.pool_service import ai_pool_comment
+    groups = [str(g).strip() for g in ((data.groups if data else None) or []) if str(g).strip()] or None
+    return ai_pool_comment(groups)
 
 
 @app.post("/api/recommend/run")

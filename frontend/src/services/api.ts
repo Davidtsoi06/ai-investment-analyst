@@ -67,6 +67,11 @@ export const testAiKey = (key?: string) =>
 /** 我的股票池体检（V1.1.0 M1） */
 export const analyzeStockPool = (groups?: string[]) =>
   api<{ items?: PoolAnalyzeItem[]; errors?: string[]; count?: number }>('POST', '/api/pool/analyze', groups && groups.length ? { groups } : undefined);
+
+/** 股票池 AI 深度点评（V1.1.6）：全池 买入/持有/减仓/观望 + 理由（需配置 Key） */
+export const analyzePoolAi = (groups?: string[]) =>
+  api<{ ok?: boolean; reason?: string; items?: { symbol: string; action: string; reason: string; ai: boolean }[] }>(
+    'POST', '/api/pool/analyze-ai', groups && groups.length ? { groups } : undefined);
 export interface PoolAnalyzeItem {
   symbol: string;
   name: string;
@@ -78,6 +83,11 @@ export interface PoolAnalyzeItem {
   position_label?: string;
   pct?: number;
   rsi?: number | null;
+  // V1.1.6：消息面与四档操作建议
+  news?: { title: string; source?: string; url?: string; published?: string }[];
+  sentiment?: '利多' | '利空' | '中性';
+  action?: '买入' | '持有' | '减仓' | '观望';
+  action_reason?: string;
   ma_bias?: number | null;
   verdict?: string;
   reason?: string;

@@ -8,6 +8,7 @@ import EmptyState from '../components/ui/EmptyState';
 import KLineChart from '../components/KLineChart';
 import {
   addWatchlistItem,
+  analyzePoolAi,
   analyzeStockPool,
   createWatchGroup,
   deleteWatchGroup,
@@ -99,11 +100,30 @@ export default function Watchlist() {
   };
 
   const runPoolAnalyze = async () => {
-    setPoolRunning(true);
+    setPoolRunning(true); setAiMap(null);
     const r = await analyzeStockPool();
     setPoolRunning(false);
     if (r.ok && r.data) setPoolReport({ items: (r.data.items as PoolAnalyzeItem[]) || [], errors: (r.data.errors as string[]) || [] });
     else setPoolReport({ items: [], errors: [parseApiError(r.error)] });
+  };
+
+  // V1.1.6：AI 深度点评（独立按钮；结果覆盖建议列并带 ✨AI 标识）
+  const [aiRunning, setAiRunning] = useState(false);
+  const [aiMap, setAiMap] = useState<Record<string, { action: string; reason: string }> | null>(null);
+  const runPoolAi = async () => {
+    if (!poolReport) return;
+    setAiRunning(true);
+    const r = await analyzePoolAi();
+    setAiRunning(false);
+    if (r.ok && r.data && r.data.ok) {
+      const m: Record<string, { action: string; reason: string }> = {};
+      for (const it of (r.data.items || [])) m[it.symbol] = { action: it.action, reason: it.reason };
+      setAiMap(m);
+      flash('✨ AI 深度点评完成（建议仅供参考）');
+    } else {
+      const d = r.data as { reason?: string } | undefined;
+      flash('AI 点评不可用：' + (d?.reason || parseApiError(r.error)), 'err');
+    }
   };
 
   const saveGroup = async () => {
@@ -218,28 +238,56 @@ export default function Watchlist() {
       {/* 体检结果 */}
       {poolReport && (
         <Card>
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
             <h2 className="font-bold text-sm">股票池体检</h2>
-            <span className="text-xs text-text-muted">60 日区间位置 + RSI + 均线 · 仅供参考</span>
-            {(poolReport.errors || []).length > 0 && <span className="text-xs text-warning ml-auto">⚠ {(poolReport.errors || []).length} 条跳过</span>}
+            <span className="text-xs text-text-muted">位置 + RSI + 最新资讯 + 操作建议（仅供参考）</span>
+            {(poolReport.errors || []).length > 0 && <span className="text-xs text-warning">⚠ {(poolReport.errors || []).length} 条跳过</span>}
+            <span className="ml-auto">
+              <Button variant="secondary" size="sm" onClick={() => void runPoolAi()} disabled={aiRunning || poolRunning || poolReport.items.length === 0}>
+                {aiRunning ? 'AI 点评中…' : (aiMap ? '✨ 重新 AI 点评' : '✨ AI 深度点评')}
+              </Button>
+            </span>
           </div>
           {poolReport.items.length === 0 && (poolReport.errors || []).length === 0 ? (
             <p className="text-sm text-text-secondary">池内暂无股票，请先添加。</p>
           ) : (
             <div className="space-y-1">
-              {poolReport.items.map((it) => (
-                <div key={it.symbol + it.market} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm border-t border-border pt-1.5 first:border-t-0 first:pt-0">
-                  <span className="text-xs text-text-muted w-20 truncate">{it.group || '默认'}</span>
-                  <span className="font-medium">{it.name}</span>
-                  <span className="text-xs text-text-muted font-number">{it.symbol}</span>
-                  <span className="font-number">{it.price != null ? fmtNum(it.price, it.market === '港股' ? 3 : 2) : '—'}</span>
-                  {it.position === 'high' && <Badge variant="danger">高位</Badge>}
-                  {it.position === 'mid' && <Badge variant="info">中位</Badge>}
-                  {it.position === 'low' && <Badge variant="success">低位</Badge>}
-                  <span className={"text-xs " + (it.verdict === '值得关注' ? 'text-success font-medium' : it.verdict === '回避追高' ? 'text-danger' : 'text-text-secondary')}>{it.verdict}</span>
-                  <span className="text-xs text-text-muted">{it.reason}</span>
+              {poolReport.items.map((it) => {
+                const ai = aiMap ? aiMap[it.symbol] : undefined;
+                const action = ai?.action || it.action;
+                const reason = ai?.reason || it.action_reason || it.reason || '';
+                const actCls = action === '买入' ? 'text-success' : action === '减仓' ? 'text-danger' : action === '持有' ? 'text-primary-600' : 'text-text-secondary';
+                return (
+                <div key={it.symbol + it.market} className="border-t border-border pt-1.5 first:border-t-0 first:pt-0 text-sm">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                    <span className="text-xs text-text-muted w-20 truncate">{it.group || '默认'}</span>
+                    <span className="font-medium">{it.name}</span>
+                    <span className="text-xs text-text-muted font-number">{it.symbol}</span>
+                    <span className="font-number">{it.price != null ? fmtNum(it.price, it.market === '港股' ? 3 : 2) : '—'}</span>
+                    {it.position === 'high' && <Badge variant="danger">高位</Badge>}
+                    {it.position === 'mid' && <Badge variant="info">中位</Badge>}
+                    {it.position === 'low' && <Badge variant="success">低位</Badge>}
+                    {it.sentiment && <span className={"text-xs " + (it.sentiment === '利多' ? 'text-success' : it.sentiment === '利空' ? 'text-danger' : 'text-text-muted')}>{it.sentiment === '利多' ? '📈' : it.sentiment === '利空' ? '📉' : '➖'} {it.sentiment}</span>}
+                    <span className={"font-medium " + actCls} title={reason}>{action || '—'}{ai ? ' ✨AI' : ''}</span>
+                    {!ai && it.verdict && <span className="text-xs text-text-muted">{it.verdict}</span>}
+                  </div>
+                  <div className="text-xs text-text-muted mt-0.5 pl-1">
+                    {reason}
+                    {(it.news || []).length > 0 && (
+                      <span className="block mt-0.5">
+                        {(it.news || []).slice(0, 3).map((n, i) => (
+                          <span key={i} className="inline-flex items-center gap-1 mr-3">
+                            {n.url ? (
+                              <a href="#" onClick={(e) => { e.preventDefault(); window.app?.openExternal(n.url || ''); }} className="text-primary-600 hover:underline">📰 {n.title}</a>
+                            ) : <span>📰 {n.title}</span>}
+                          </span>
+                        ))}
+                      </span>
+                    )}
+                  </div>
                 </div>
-              ))}
+                );
+              })}
               {(poolReport.errors || []).map((e, i) => <p key={'e' + i} className="text-xs text-warning">⚠ {e}</p>)}
             </div>
           )}
