@@ -340,6 +340,8 @@ export interface RecommendPrefs {
   early_news?: boolean;
   /** 资讯时间窗（天）：0=全部历史 / 30 / 90 / 180 / 365 */
   news_window_days?: number;
+  /** 政策面默认关注领域（随保存记住） */
+  policy_focus?: string;
 }
 export const getRecommendPrefs = () => api<RecommendPrefs>('GET', '/api/recommend/prefs');
 export const saveRecommendPrefs = (p: Partial<RecommendPrefs>) => api<{ ok?: boolean }>('PUT', '/api/recommend/prefs', p);

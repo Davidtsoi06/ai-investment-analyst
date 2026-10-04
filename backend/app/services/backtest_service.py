@@ -9,6 +9,7 @@
 评估数据源默认 data_fusion（可注入 provider 便于单元测试）。
 """
 
+import json
 from datetime import date
 
 from ..data_sources.market.data_fusion import data_fusion
@@ -192,7 +193,7 @@ def recommendation_history(limit: int = 50) -> list[dict]:
     try:
         rows = conn.execute(
             '''SELECT r.id, r.symbol, r.name, r.market, r.rec_type, r.confidence, r.logic, r.risk_level,
-                      r.rec_date, r.rec_price, r.status, r.tier,
+                      r.rec_date, r.rec_price, r.status, r.tier, r.driver, r.sources,
                       p.outcome, p.result_pct, p.result_price, p.eval_days
                FROM recommendations r
                LEFT JOIN recommendation_performance p
@@ -200,6 +201,19 @@ def recommendation_history(limit: int = 50) -> list[dict]:
                ORDER BY r.rec_date DESC, r.id DESC LIMIT ?''',
             (min(limit, 200),),
         ).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            # V1.2.0：信源 JSON → 列表（历史列表可显示依据与信源）
+            v = d.get('sources')
+            if isinstance(v, str):
+                try:
+                    d['sources'] = json.loads(v) if v else []
+                except (ValueError, TypeError):
+                    d['sources'] = []
+            elif v is None:
+                d['sources'] = []
+            out.append(d)
+        return out
     finally:
         conn.close()

@@ -311,6 +311,7 @@ export default function Recommendation() {
         setPrefMemory(pr.data.memory || 'setting');
         setPrefEarly(!!pr.data.early_news);
         if (typeof pr.data.news_window_days === 'number') setPrefWindow(pr.data.news_window_days);
+        if (pr.data.policy_focus) setPolicyFocus(pr.data.policy_focus);
       }
     }).catch(() => {});
     setIntentOpen(true);
@@ -374,7 +375,7 @@ export default function Recommendation() {
       // V1.2.0 记忆策略：设置为"记住本次选择"时，生成后询问是否保存为默认
       if (prefMemory === 'remember' && basisPicked.length > 0
           && window.confirm('是否将本次推荐依据与数量保存为默认？（取消 = 仅本次生效）')) {
-        void saveRecommendPrefs({ basis: basisPicked, quota: quotaPicked, memory: 'remember' });
+        void saveRecommendPrefs({ basis: basisPicked, quota: quotaPicked, memory: 'remember', policy_focus: policyFocus.trim() });
       }
     } else {
       setMsg({ type: 'ok', text: '生成完成' });
@@ -684,6 +685,10 @@ export default function Recommendation() {
                 <span className="text-xs text-text-muted font-number">{h.symbol}</span>
                 <Badge variant={h.market === '港股' ? 'info' : 'default'}>{h.market || 'A股'}</Badge>
                 <Badge variant={OUTCOME_BADGE[h.outcome || ''] || 'default'}>{outcomeOf(h.outcome)}</Badge>
+                {/* V1.2.0 依据徽章（历史同样标注） */}
+                {String(h.driver || '').split(',').filter(Boolean).map((d) => (
+                  <Badge key={d} variant={d === 'news' || d === 'policy' ? 'info' : 'default'}>{DRIVER_LABEL[d] || d}</Badge>
+                ))}
                 <span className="text-xs text-text-secondary ml-auto">
                   置信度 <span className="font-number">{h.confidence != null ? h.confidence + '%' : '—'}</span>
                   <span className="mx-2 text-text-muted">|</span>

@@ -771,6 +771,7 @@ class RecommendPrefIn(BaseModel):
     memory: str = 'setting'  # setting=跟随设置 / remember=记住本次选择
     early_news: bool | None = None      # 是否开启早期信息搜索
     news_window_days: int | None = None  # 0=全部历史 / 30 / 90 / 180 / 365
+    policy_focus: str | None = None      # 政策面默认关注领域（随保存记住）
 
 
 @app.get("/api/recommend/prefs")
@@ -787,6 +788,7 @@ def recommend_prefs_get(x_backend_token: str = Header(default="")):
         'memory': (get_setting('recommend.basis_memory') or 'setting'),
         'early_news': window == 0 or window > 30,
         'news_window_days': window,
+        'policy_focus': (get_setting('recommend.policy_focus') or ''),
     }
 
 
@@ -819,6 +821,8 @@ def recommend_prefs_put(data: RecommendPrefIn, x_backend_token: str = Header(def
         else:
             window = 30
         set_setting('recommend.news_window', window)
+    if data.policy_focus is not None:
+        set_setting('recommend.policy_focus', (data.policy_focus or '').strip())
     return {'ok': True}
 
 

@@ -613,6 +613,35 @@ def _ai_entries(candidates: list[dict], mode: str = 'both',
 
 # ---------------- 主流程 ----------------
 
+def _attach_sources(entries: list[dict]) -> list[dict]:
+    """V1.2.0：为无信源的条目补 1 条本地相关资讯（近 30 天，技术/基本面/资金面佐证）；
+    并按「多依据命中优先 → 置信度降序」排序。"""
+    conn = get_connection()
+    try:
+        for e in entries:
+            if e.get('sources'):
+                continue
+            try:
+                row = conn.execute(
+                    "SELECT title, url, source, published_at FROM news_cache "
+                    "WHERE (title LIKE ? OR title LIKE ?) AND substr(published_at, 1, 10) >= date('now', '-30 day') "
+                    "ORDER BY id DESC LIMIT 1",
+                    (f"%{e.get('name') or ''}%", f"%{e.get('symbol') or ''}%"),
+                ).fetchone()
+            except Exception:  # noqa: BLE001
+                row = None
+            if row and row['url']:
+                e['sources'] = [{'title': row['title'], 'url': row['url'],
+                                 'source': row['source'], 'date': (row['published_at'] or '')[:10]}]
+            else:
+                e['sources'] = []
+    finally:
+        conn.close()
+    # 多依据命中优先（driver 含逗号=多依据），其次置信度
+    return sorted(entries, key=lambda x: (0 if ',' in str(x.get('driver') or '') else 1,
+                                          -(x.get('confidence') or 0)))
+
+
 def _parse_sources(row: dict) -> dict:
     """V1.2.0：信源 JSON 字符串 → 列表（供前端渲染）"""
     v = row.get('sources')
@@ -987,6 +1016,8 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
     else:
         final_source = 'rules'
 
+    # V1.2.0：补信源（技术/基本面/资金面佐证）+ 多依据命中优先排序
+    result['passed'] = _attach_sources(result['passed'])
     saved = _save_entries(result['passed'], today, mode) if result['passed'] else 0
     if saved:
         _notify(result['passed'], final_source)
