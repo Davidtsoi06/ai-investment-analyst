@@ -367,10 +367,11 @@ def load_basis() -> list[str]:
     """读取设置中的推荐依据（默认 消息面+技术面）"""
     from ..services.settings_service import get_setting
     try:
-        raw = get_setting('recommend.basis') or ''
-        arr = json.loads(raw) if raw else None
-        if isinstance(arr, list):
-            picked = [str(x) for x in arr if str(x) in VALID_BASIS]
+        v = get_setting('recommend.basis')
+        if isinstance(v, str) and v:
+            v = json.loads(v)
+        if isinstance(v, list):
+            picked = [str(x) for x in v if str(x) in VALID_BASIS]
             if picked:
                 return picked
     except Exception:  # noqa: BLE001
@@ -383,8 +384,10 @@ def load_quota() -> dict:
     from ..services.settings_service import get_setting
     quota = dict(_DEFAULT_QUOTA)
     try:
-        raw = get_setting('recommend.basis_quota') or ''
-        d = json.loads(raw) if raw else None
+        raw = get_setting('recommend.basis_quota')
+        if isinstance(raw, str) and raw:
+            raw = json.loads(raw)
+        d = raw
         if isinstance(d, dict):
             for k, v in d.items():
                 if k in VALID_BASIS:
@@ -596,6 +599,19 @@ def _ai_entries(candidates: list[dict], mode: str = 'both',
 
 # ---------------- 主流程 ----------------
 
+def _parse_sources(row: dict) -> dict:
+    """V1.2.0：信源 JSON 字符串 → 列表（供前端渲染）"""
+    v = row.get('sources')
+    if isinstance(v, str):
+        try:
+            row['sources'] = json.loads(v) if v else []
+        except (ValueError, TypeError):
+            row['sources'] = []
+    elif v is None:
+        row['sources'] = []
+    return row
+
+
 def _load_today(today: str, mode: str = 'both') -> list[dict]:
     """当日推荐（mode: short/long/both 按类型过滤）"""
     conn = get_connection()
@@ -608,6 +624,7 @@ def _load_today(today: str, mode: str = 'both') -> list[dict]:
                 "FROM recommendations WHERE rec_date = ? ORDER BY rec_type, id",
                 (today,),
             ).fetchall()
+        # 注：下方统一 _parse_sources 解析信源 JSON
         else:
             rtype = '短线' if mode == 'short' else '长线'
             rows = conn.execute(
@@ -617,7 +634,7 @@ def _load_today(today: str, mode: str = 'both') -> list[dict]:
                 "FROM recommendations WHERE rec_date = ? AND rec_type = ? ORDER BY id",
                 (today, rtype),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [_parse_sources(dict(r)) for r in rows]
     finally:
         conn.close()
 
@@ -634,7 +651,8 @@ def _tier_fill(entries: list[dict], target: int = 5, cap: int = 10) -> list[dict
 
 
 def _fill_shortfall(passed: list[dict], enriched: list[dict], holdings: list[dict],
-                     mode: str, target: int, cap: int, assessed: list[dict] | None = None) -> list[dict]:
+                     mode: str, target: int, cap: int, assessed: list[dict] | None = None,
+                     allow_short: bool = True, allow_long: bool = True) -> list[dict]:
     """V1.1.5B 数量优先：约束通过后，短线/长线各自仍不足 target 时，从未入选候选按
     规则评分降序补足（logic 带【补足】标记、tier=watch 明确未达评估线）。
     持仓中的股票不补；已在合并列表（assessed=merged，含被约束拦截者）出现的不补——
@@ -648,6 +666,11 @@ def _fill_shortfall(passed: list[dict], enriched: list[dict], holdings: list[dic
 
     for rtype, make in (('短线', _short_rule), ('长线', _long_rule)):
         if mode not in ('both', 'short' if rtype == '短线' else 'long'):
+            continue
+        # V1.2.0：补足仅限已启用依据（短线←技术面 / 长线←基本面）
+        if rtype == '短线' and not allow_short:
+            continue
+        if rtype == '长线' and not allow_long:
             continue
         if _count(rtype) >= target:
             continue
@@ -931,7 +954,10 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
 
     # 4.5) V1.1.5B 数量优先：约束后各类型仍不足档位下限时，从未入选候选按评分
     #      补足到下限（logic 带【补足】标记 + tier=watch，明确未达评估线，仅供参考）
-    result['passed'] = _fill_shortfall(result['passed'], enriched, holdings, mode, t_min, t_max, assessed=merged)
+    result['passed'] = _fill_shortfall(result['passed'], enriched, holdings, mode, t_min, t_max,
+                                        assessed=merged, allow_short=tech_on, allow_long=fund_on)
+    # V1.2.0：补足条目同样受依据配额约束（避免超出用户设定的条数）
+    result['passed'] = apply_quota(result['passed'], basis, q)
 
     # 最终来源语义（V1.0.9 三态）：
     # ai = AI 产出条目；rules = AI 不可用降级规则产出（或仅规则条目）；ai_empty = AI 正常但无合适标的

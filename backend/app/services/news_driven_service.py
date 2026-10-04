@@ -171,7 +171,8 @@ def _verify_and_build(theme: dict, kind: str) -> list[dict]:
             'valuation_min': round(price * 0.92, 2), 'valuation_max': round(price * 1.08, 2),
             'confidence': conf,
             'logic': '',  # 由 _compose_logic 填充
-            'risk_level': '高' if stage != 'early' else '中',
+            # V1.2.0：风险细分——早期/发酵中按"中"（允许稳健型画像纳入），已高潮按"高"
+            'risk_level': '高' if stage == 'hot' else '中',
             'price': price,
             'tier': 'rec' if conf >= 60 else 'watch',
             'driver': kind,

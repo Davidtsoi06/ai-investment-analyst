@@ -19,12 +19,19 @@ import {
   getRecommendationsPerformance,
   getTodayRecommendations,
   getWatchlist,
+  getRecommendPrefs,
+  saveRecommendPrefs,
   parseApiError,
 } from '../services/api';
 import { Link } from 'react-router-dom';
 import type { BacktestRecentItem, HistoryItem, RecommendItem, TodayRecommendations } from '../services/api';
 
 const REC_TYPE_LABEL: Record<string, string> = { 短线: '短线', 长线: '长线', short: '短线', long: '长线' };
+
+// V1.2.0 推荐依据标签
+const DRIVER_LABEL: Record<string, string> = {
+  news: '📰 消息面', technical: '📈 技术面', fundamental: '💰 基本面', capital: '💵 资金面', policy: '🏛️ 政策面',
+};
 
 function isShort(r: RecommendItem): boolean {
   return r.rec_type === '短线' || r.rec_type === 'short';
@@ -77,6 +84,8 @@ function RecCard({ rec }: { rec: RecommendItem }) {
   const [showK, setShowK] = useState(false);
   const [kb, setKb] = useState<KlineBar[]>([]);
   const [kLoading, setKLoading] = useState(false);
+  // V1.2.0 信源预览弹窗（本卡片内）
+  const [prev, setPrev] = useState<{ title: string; url?: string; source?: string; date?: string } | null>(null);
 
   useEffect(() => {
     if (!showK || kb.length > 0) return;
@@ -105,7 +114,25 @@ function RecCard({ rec }: { rec: RecommendItem }) {
             <Badge variant="warning">⚠ 补足·未达评估线</Badge>
           </span>
         )}
+        {/* V1.2.0 依据徽章 */}
+        {String(rec.driver || '').split(',').filter(Boolean).map((d) => (
+          <Badge key={d} variant={d === 'news' || d === 'policy' ? 'info' : 'default'}>
+            {DRIVER_LABEL[d] || d}
+          </Badge>
+        ))}
       </div>
+      {/* V1.2.0 信源：点击打开原文 / 预览 */}
+      {Array.isArray(rec.sources) && rec.sources.length > 0 && (
+        <div className="text-xs text-text-secondary flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="text-text-muted">📰 信源：</span>
+          {rec.sources.slice(0, 3).map((s, i) => (
+            <span key={i} className="inline-flex items-center gap-1">
+              <button className="text-primary-600 hover:underline text-left" onClick={() => setPrev(s)}>{s.title}</button>
+              <span className="text-text-muted">（{s.source || '资讯'}{s.date ? ' · ' + s.date.slice(5) : ''}）</span>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="text-right -mt-1">
         <Link to={'/stock?symbol=' + encodeURIComponent(rec.symbol) + '&market=' + encodeURIComponent(rec.market || 'A股')} className="text-xs text-primary-600 hover:text-primary-700">🔍 诊股 →</Link>
       </div>
@@ -154,6 +181,20 @@ function RecCard({ rec }: { rec: RecommendItem }) {
           <div className="text-[11px] text-text-muted mt-1">入场/止损/目标位：{fmtPrice(rec.entry_min ?? rec.valuation_min, rec.market)} ~ {fmtPrice(rec.entry_max ?? rec.valuation_max, rec.market)} · 止损 {fmtPrice(rec.stop_loss, rec.market)} · 目标 {fmtPrice(rec.target, rec.market)}</div>
         </div>
       )}
+      {/* V1.2.0 信源预览（应用内，离线可看；可打开原文） */}
+      {prev && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setPrev(null)}>
+          <div className="bg-surface rounded-xl shadow-xl w-full max-w-lg p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="text-xs text-text-muted mb-1">📰 推荐信源 · {prev.source || '资讯'}{prev.date ? ' · ' + prev.date : ''}</div>
+            <h3 className="text-base font-bold text-primary-900 mb-2">{prev.title}</h3>
+            <p className="text-xs text-text-secondary">点击下方按钮可在系统浏览器打开原文网站（本软件不转载全文，仅作来源标注）。</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setPrev(null)}>关闭</Button>
+              {prev.url && <Button size="sm" onClick={() => { if (window.app?.openExternal) void window.app.openExternal(prev.url || ''); else window.open(prev.url, '_blank'); }}>打开原文 ↗</Button>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -182,6 +223,11 @@ export default function Recommendation() {
   const [genScope, setGenScope] = useState<'market' | 'pool'>('market');
   const [poolGroups, setPoolGroups] = useState<string[]>([]);
   const [poolItems, setPoolItems] = useState<{ group_name?: string; symbol: string; name?: string }[]>([]);
+  // V1.2.0 推荐依据（弹窗临时可改；设置页为默认）
+  const [prefBasis, setPrefBasis] = useState<Record<string, boolean>>({ news: true, technical: true, fundamental: false, capital: false, policy: false });
+  const [prefQuota, setPrefQuota] = useState<Record<string, number>>({ news: 3, technical: 5, fundamental: 3, capital: 2, policy: 2 });
+  const [prefMemory, setPrefMemory] = useState<string>('setting');
+  const [policyFocus, setPolicyFocus] = useState('');
 
   // AI 最近错误（V1.0.7：规则降级原因可见化，不再"莫名降级"）
   const [aiErr, setAiErr] = useState<{ last_error?: string; last_error_at?: string; configured?: boolean } | null>(null);
@@ -253,6 +299,16 @@ export default function Recommendation() {
     setGenMode('both');
     setGenScope('market');
     setPoolGroups([]);
+    // V1.2.0：载入设置中的推荐偏好（弹窗内可临时修改）
+    getRecommendPrefs().then((pr) => {
+      if (pr.ok && pr.data) {
+        const b: Record<string, boolean> = { news: false, technical: false, fundamental: false, capital: false, policy: false };
+        for (const k of (pr.data.basis || [])) b[k] = true;
+        setPrefBasis(b);
+        if (pr.data.quota) setPrefQuota({ news: 3, technical: 5, fundamental: 3, capital: 2, policy: 2, ...pr.data.quota });
+        setPrefMemory(pr.data.memory || 'setting');
+      }
+    }).catch(() => {});
     setIntentOpen(true);
   };
 
@@ -264,9 +320,15 @@ export default function Recommendation() {
     setIntentOpen(false);
     setGenerating(true);
     setMsg(null);
+    const basisPicked = Object.keys(prefBasis).filter((k) => prefBasis[k]);
+    const quotaPicked: Record<string, number> = {};
+    for (const k of basisPicked) quotaPicked[k] = prefQuota[k] ?? 3;
     let r;
     try {
-      r = await generateRecommendations({ intent, mode, scope: { type: scopeType, groups } });
+      r = await generateRecommendations({
+        intent, mode, scope: { type: scopeType, groups },
+        basis: basisPicked, quota: quotaPicked, policy_focus: policyFocus.trim(),
+      });
     } catch (e) {
       setGenerating(false);
       setMsg({ type: 'err', text: '生成失败：' + (e instanceof Error ? e.message : String(e)) });
@@ -294,13 +356,22 @@ export default function Recommendation() {
         return fillN > 0 ? arr.length + ' 只（评估达标 ' + (arr.length - fillN) + ' · 补足 ' + fillN + '）' : arr.length + ' 只';
       };
       const fillTotal = list.filter(isFill).length;
+      const dc = (d as { driver_counts?: Record<string, number> }).driver_counts || {};
+      const dcTxt = Object.keys(dc).length > 0
+        ? '｜依据：' + Object.keys(dc).map((k) => (DRIVER_LABEL[k] || k) + ' ' + dc[k]).join(' · ')
+        : '';
       setMsg({
         type: 'ok',
         text: (d.cached ? '已是最新（缓存）' : '已生成') + (parts.length ? '（' + parts.join(' · ') + '）' : '')
-          + '：短线 ' + fmtStat(scList) + ' · 长线 ' + fmtStat(lcList)
+          + '：短线 ' + fmtStat(scList) + ' · 长线 ' + fmtStat(lcList) + dcTxt
           + (fillTotal > 0 ? '。⚠ 其中补足条目为凑足数量列入，评分未达评估线，仅供参考' : '')
           + (d.source === 'rules' ? '（规则引擎）' : d.source === 'ai_empty' ? '（AI 暂无合适标的）' : ''),
       });
+      // V1.2.0 记忆策略：设置为"记住本次选择"时，生成后询问是否保存为默认
+      if (prefMemory === 'remember' && basisPicked.length > 0
+          && window.confirm('是否将本次推荐依据与数量保存为默认？（取消 = 仅本次生效）')) {
+        void saveRecommendPrefs({ basis: basisPicked, quota: quotaPicked, memory: 'remember' });
+      }
     } else {
       setMsg({ type: 'ok', text: '生成完成' });
     }
@@ -683,6 +754,38 @@ export default function Recommendation() {
                   <p className="text-xs text-text-muted mt-1.5">勾选要分析的表（组）；不勾选 = 全部组。池内不足 5 只时不自动补蓝筹，会提示先添加观察股。</p>
                 </div>
               )}
+            </div>
+
+            {/* V1.2.0 推荐依据（本次可临时修改；数字 = 该依据最多条数） */}
+            <div className="text-xs text-text-secondary mb-1.5">推荐依据（可多选；本次临时修改）</div>
+            <div className="space-y-1.5 mb-2">
+              {([
+                ['news', '📰 消息面'],
+                ['technical', '📈 技术面'],
+                ['fundamental', '💰 基本面'],
+                ['capital', '💵 资金面'],
+                ['policy', '🏛️ 政策面'],
+              ] as [string, string][]).map(([key, label]) => (
+                <div key={key} className="flex items-center gap-2 text-sm">
+                  <label className="flex items-center gap-2 cursor-pointer flex-1">
+                    <input type="checkbox" checked={!!prefBasis[key]} onChange={(e) => setPrefBasis({ ...prefBasis, [key]: e.target.checked })} />
+                    {label}
+                  </label>
+                  <input type="number" min={0} max={20} value={prefQuota[key] ?? 0} disabled={!prefBasis[key]}
+                    onChange={(e) => setPrefQuota({ ...prefQuota, [key]: Math.max(0, Math.min(20, Number(e.target.value) || 0)) })}
+                    className="w-14 rounded border border-border px-2 py-0.5 text-sm text-right outline-none focus:border-primary-500 disabled:opacity-40" />
+                  <span className="text-xs text-text-muted">条</span>
+                </div>
+              ))}
+              {prefBasis.policy && (
+                <input value={policyFocus} onChange={(e) => setPolicyFocus(e.target.value)}
+                  placeholder="政策面关注领域（可选，如：新能源、半导体、低空经济）"
+                  className="w-full rounded border border-border px-3 py-1.5 text-sm outline-none focus:border-primary-500" />
+              )}
+              {Object.keys(prefBasis).filter((k) => prefBasis[k]).length === 0 && (
+                <p className="text-xs text-danger">请至少选择一种推荐依据</p>
+              )}
+              <p className="text-xs text-text-muted">共 {Object.keys(prefBasis).filter((k) => prefBasis[k]).reduce((s, k) => s + (prefQuota[k] || 0), 0)} 条（上限受画像档位建议约束；消息面/政策面需配置 AI Key）</p>
             </div>
 
             <div className="text-xs text-text-secondary mb-1.5">还想限定行业/类型？（可选）</div>
