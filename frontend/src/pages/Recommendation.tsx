@@ -30,7 +30,8 @@ const REC_TYPE_LABEL: Record<string, string> = { 短线: '短线', 长线: '长�
 
 // V1.2.0 推荐依据标签
 const DRIVER_LABEL: Record<string, string> = {
-  news: '📰 消息面', technical: '📈 技术面', fundamental: '💰 基本面', capital: '💵 资金面', policy: '🏛️ 政策面',
+  news: '📰 消息面', technical: '📈 技术面', fundamental: '💰 基本面', capital: '💵 资金面',
+  policy: '🏛️ 政策面', hot: '🔥 热点/板块',
 };
 
 function isShort(r: RecommendItem): boolean {
@@ -797,6 +798,7 @@ export default function Recommendation() {
                 ['fundamental', '💰 基本面'],
                 ['capital', '💵 资金面'],
                 ['policy', '🏛️ 政策面'],
+                ['hot', '🔥 热点/板块'],
               ] as [string, string][]).map(([key, label]) => (
                 <div key={key} className="flex items-center gap-2 text-sm">
                   <label className="flex items-center gap-2 cursor-pointer flex-1">

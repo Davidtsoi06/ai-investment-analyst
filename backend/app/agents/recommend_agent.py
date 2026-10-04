@@ -355,12 +355,12 @@ def _long_rule(symbol: str, name: str, market: str, quote, snap: dict, fill: boo
 # ---------------- AI 生成与解析 ----------------
 
 # V1.2.0 推荐依据（用户可多选）
-VALID_BASIS = ('news', 'technical', 'fundamental', 'capital', 'policy')
+VALID_BASIS = ('news', 'technical', 'fundamental', 'capital', 'policy', 'hot')
 BASIS_CN = {'news': '📰 消息面', 'technical': '📈 技术面', 'fundamental': '💰 基本面',
-            'capital': '💵 资金面', 'policy': '🏛️ 政策面'}
+            'capital': '💵 资金面', 'policy': '🏛️ 政策面', 'hot': '🔥 热点/板块'}
 _DEFAULT_BASIS = ['news', 'technical']
-_DEFAULT_QUOTA = {'news': 3, 'technical': 5, 'fundamental': 3, 'capital': 2, 'policy': 2}
-_BASIS_ORDER = {'news': 0, 'policy': 1, 'technical': 2, 'fundamental': 3, 'capital': 4}
+_DEFAULT_QUOTA = {'news': 3, 'technical': 5, 'fundamental': 3, 'capital': 2, 'policy': 2, 'hot': 3}
+_BASIS_ORDER = {'news': 0, 'policy': 1, 'hot': 2, 'technical': 3, 'fundamental': 4, 'capital': 5}
 
 
 def load_basis() -> list[str]:
@@ -872,6 +872,7 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
     cap_on = 'capital' in basis
     news_on = 'news' in basis
     policy_on = 'policy' in basis
+    hot_on = 'hot' in basis
 
     # 记录本次意愿（供 today/cached 响应回显；空意愿则清除）
     _save_intent(intent, today)
@@ -966,7 +967,7 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
     # 2.2) V1.2.0 消息面 / 政策面驱动（资讯 → AI 主题与受益标的 → 技术校验）
     driver_notes: list[str] = []
     driver_entries: list[dict] = []
-    if news_on or policy_on:
+    if news_on or policy_on or hot_on:
         from ..services.news_driven_service import build_driver_entries
         # V1.2.0：资讯时间窗（用户可在设置中开启「早期信息搜索」以回溯更早消息）
         window_days = load_news_window()
@@ -979,6 +980,11 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
             driver_entries += r2.get('entries') or []
             driver_notes += r2.get('notes') or []
         driver_notes.append('资讯窗口：' + ('全部历史（早期信息模式）' if window_days == 0 else f'近 {window_days} 天'))
+    if hot_on and mode in ('short', 'both'):
+        from ..data_sources.news.sector_source import build_hot_entries
+        rh = build_hot_entries(int(q.get('hot') or 3))
+        driver_entries += rh.get('entries') or []
+        driver_notes += rh.get('notes') or []
         if mode != 'both':
             want = '短线' if mode == 'short' else '长线'
             driver_entries = [e for e in driver_entries if e.get('rec_type') == want]

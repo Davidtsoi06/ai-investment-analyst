@@ -32,6 +32,8 @@ async def lifespan(_app: FastAPI):
     register_hourly_sync()
     register_price_refresh_job()
     register_news_jobs()
+    from .data_sources.news.sector_source import register_extra_news_jobs  # noqa: E402
+    register_extra_news_jobs()
     from .data_sources.news.overseas_fetcher import register_overseas_jobs  # noqa: E402
     register_overseas_jobs()
     register_recommend_jobs()

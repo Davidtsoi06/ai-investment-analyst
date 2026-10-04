@@ -485,6 +485,7 @@ export default function Settings() {
             ['fundamental', '💰 基本面（估值与财务）'],
             ['capital', '💵 资金面（量能与大单异动）'],
             ['policy', '🏛️ 政策面（政策文件驱动的受益行业；需 AI Key）'],
+            ['hot', '🔥 热点/板块（板块涨幅榜与成分股，捕捉板块效应）'],
           ] as [string, string][]).map(([key, label]) => (
             <div key={key} className="flex items-center gap-3 text-sm">
               <label className="flex items-center gap-2 cursor-pointer flex-1">
