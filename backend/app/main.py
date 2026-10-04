@@ -746,6 +746,50 @@ def pool_analyze_ai_api(data: PoolAnalyzeIn | None = None, x_backend_token: str 
     return ai_pool_comment(groups)
 
 
+@app.get("/api/news/themes")
+def news_themes_api(days: int = Query(180, ge=7, le=3650), x_backend_token: str = Header(default="")):
+    """主题雷达（V1.3.0 二期）：窗口内资讯的主题命中数/首次出现/关联标的/代表资讯"""
+    require_token(x_backend_token)
+    from .services.theme_radar_service import scan_themes
+    return scan_themes(days)
+
+
+class ThemeIn(BaseModel):
+    name: str = ''
+
+
+@app.post("/api/news/themes")
+def news_themes_add(data: ThemeIn, x_backend_token: str = Header(default="")):
+    """添加自定义关注主题"""
+    require_token(x_backend_token)
+    from .services.theme_radar_service import get_my_themes, set_my_themes
+    name = (data.name or '').strip()
+    if not name:
+        return {'ok': False, 'reason': '主题名称不能为空'}
+    themes = get_my_themes()
+    if name not in themes:
+        themes.append(name)
+    return {'ok': True, 'my_themes': set_my_themes(themes)}
+
+
+@app.delete("/api/news/themes")
+def news_themes_del(name: str = Query(..., min_length=1), x_backend_token: str = Header(default="")):
+    """删除自定义关注主题"""
+    require_token(x_backend_token)
+    from .services.theme_radar_service import get_my_themes, set_my_themes
+    themes = [t for t in get_my_themes() if t != name.strip()]
+    return {'ok': True, 'my_themes': set_my_themes(themes)}
+
+
+@app.get("/api/news/theme-backtest")
+def news_theme_backtest_api(theme: str = Query(..., min_length=1), days: int = Query(365, ge=7, le=3650),
+                            x_backend_token: str = Header(default="")):
+    """主题回溯：以主题首次出现日为基准，回看关联标的表现（"如果当时看到这条消息"）"""
+    require_token(x_backend_token)
+    from .services.theme_radar_service import theme_backtest
+    return theme_backtest(theme, days)
+
+
 @app.post("/api/recommend/run")
 def recommend_run(data: RecommendRunIn | None = None, x_backend_token: str = Header(default="")):
     """手动触发生成当日推荐（V1.1.0）：intent 意愿文本 / mode 短线长线 / scope 候选范围"""

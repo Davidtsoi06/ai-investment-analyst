@@ -157,6 +157,7 @@ def get_backtest_report() -> dict:
     try:
         rows = conn.execute(
             '''SELECT r.id, r.symbol, r.name, r.market, r.rec_type, r.confidence, r.rec_date, r.rec_price,
+                      r.driver,
                       p.outcome, p.result_pct, p.result_price, p.entry_price, p.eval_days, p.horizon, p.evaluated_at
                FROM recommendation_performance p
                JOIN recommendations r ON r.id = p.recommendation_id
@@ -182,7 +183,19 @@ def get_backtest_report() -> dict:
                                'outcome', 'result_pct', 'result_price', 'entry_price', 'eval_days')}
             for r in perf[:20]
         ]
-        return {'summary': summary, 'by_type': by_type, 'by_month': by_month, 'recent': recent}
+        # V1.3.0 二期：按推荐依据分组胜率（多依据条目分别计入各依据）——验证哪类依据更有效
+        by_driver: dict = {}
+        buckets: dict = {}
+        for r in perf:
+            for d in str(r.get('driver') or '').split(','):
+                d = d.strip()
+                if d:
+                    buckets.setdefault(d, []).append(r)
+        for d, rows_d in buckets.items():
+            by_driver[d] = _stats_of(rows_d)
+
+        return {'summary': summary, 'by_type': by_type, 'by_month': by_month, 'recent': recent,
+                'by_driver': by_driver}
     finally:
         conn.close()
 
