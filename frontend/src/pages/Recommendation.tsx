@@ -293,6 +293,8 @@ export default function Recommendation() {
 
   const btSummary = useMemo(() => (backtest?.summary ?? {}) as Record<string, unknown>, [backtest]);
   const btByType = useMemo(() => (backtest?.by_type ?? {}) as Record<string, Record<string, unknown>>, [backtest]);
+  // V1.3.0 二期：按推荐依据分组的胜率（验证哪类依据更有效）
+  const btByDriver = useMemo(() => (backtest?.by_driver ?? {}) as Record<string, Record<string, unknown>>, [backtest]);
   const btMonths = useMemo(() => toList<Record<string, unknown>>(backtest?.by_month), [backtest]);
   const btRecent = useMemo(() => toList<BacktestRecentItem>(backtest?.recent), [backtest]);
 
@@ -616,6 +618,27 @@ export default function Recommendation() {
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {Object.keys(btByDriver).length > 0 && (
+              <div className="mb-3">
+                <div className="text-xs text-text-secondary mb-1">按推荐依据统计（验证哪类依据更有效）</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {Object.keys(btByDriver).map((d) => {
+                    const g = btByDriver[d];
+                    return (
+                      <div key={d} className="bg-bg-secondary rounded px-3 py-2">
+                        <div className="text-xs text-text-secondary mb-1">{DRIVER_LABEL[d] || d}（{num(g.count) ?? 0} 条）</div>
+                        <div className="text-sm font-number">
+                          胜率 <span className="text-primary-700">{fmtPct(num(g.win_rate))}</span>
+                          <span className="mx-1.5 text-text-muted">/</span>
+                          均收 <span className={upDownCls(num(g.avg_return))}>{fmtPct(num(g.avg_return))}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 

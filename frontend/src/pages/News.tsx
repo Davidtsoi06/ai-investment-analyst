@@ -122,6 +122,20 @@ export default function News() {
   const [presetOn, setPresetOn] = useState<Record<string, boolean>>({ 'us-macro': true, 'cn-hk-blue': true });
   const [customDirs, setCustomDirs] = useState<string[]>(() => loadCustomDirs());
   const [dirInput, setDirInput] = useState('');
+  // V1.3.0 二期：主题雷达 + 主题历史回溯
+  const [radar, setRadar] = useState<{ themes: { theme: string; count: number; first_date: string; last_date: string; stocks: { symbol: string; name: string; market: string }[]; news: { title: string; url?: string; source?: string; date?: string }[] }[]; my_themes: string[]; news_total: number } | null>(null);
+  const [radarDays, setRadarDays] = useState(180);
+  const [radarLoading, setRadarLoading] = useState(false);
+  const [myTheme, setMyTheme] = useState('');
+  const [openTheme, setOpenTheme] = useState<string | null>(null);
+  const [bt, setBt] = useState<{ loading?: boolean; theme?: string; first_date?: string; error?: string; items?: { symbol: string; name: string; base_date: string; base_price: number; last_price: number; return_pct: number; max_gain_pct: number }[] } | null>(null);
+
+  const loadRadar = async (days = radarDays) => {
+    setRadarLoading(true);
+    const r = await api<never>('GET', '/api/news/themes?days=' + days);
+    setRadarLoading(false);
+    if (r.ok && r.data) setRadar(r.data as never);
+  };
 
   const load = async () => {
     setLoadingList(true);
@@ -134,7 +148,7 @@ export default function News() {
     if (l.ok) setItems((l.data as NewsItem[]) || []);
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); void loadRadar(180); }, []);
 
   // 分区：池相关（related/持仓）> 海外 > 全市场中文
   const poolItems = items.filter((it) => (Array.isArray(it.related) && it.related.length > 0) || it.holding_related);
@@ -207,7 +221,216 @@ export default function News() {
         )}
       </Card>
 
+      {/* V1.3.0 二期 📡 主题雷达：主题命中/首次出现时间/关联标的 + 历史回溯 */}
+      <Card>
+        <div className="flex items-center gap-2 mb-2 flex-wrap">
+          <h2 className="font-bold text-sm">📡 主题雷达</h2>
+          <span className="text-xs text-text-muted">主题何时首次出现 · 关联标的 · 「如果当时看到」回溯</span>
+          <select value={radarDays} onChange={(e) => { const d = Number(e.target.value); setRadarDays(d); void loadRadar(d); }}
+            className="ml-auto rounded border border-border px-2 py-1 text-xs bg-white">
+            <option value={90}>近 90 天</option>
+            <option value={180}>近 180 天</option>
+            <option value={365}>近 1 年</option>
+          </select>
+          <Button size="sm" variant="secondary" onClick={() => void loadRadar()} disabled={radarLoading}>{radarLoading ? '扫描中...' : '重新扫描'}</Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 mb-2">
+          <input value={myTheme} onChange={(e) => setMyTheme(e.target.value)} placeholder="添加关注主题（如：钻石散热）"
+            className="rounded border border-border px-2 py-1 text-xs outline-none focus:border-primary-500" />
+          <Button size="sm" variant="secondary" onClick={async () => {
+            const v = myTheme.trim();
+            if (!v) return;
+            await api('POST', '/api/news/themes', { name: v });
+            setMyTheme('');
+            void loadRadar();
+          }}>＋ 添加</Button>
+          {(radar?.my_themes || []).map((t) => (
+            <span key={t} className="inline-flex items-center gap-1 text-xs bg-primary-50 border border-primary-200 rounded px-2 py-0.5 text-primary-700">
+              {t}
+              <button className="text-danger" onClick={async () => { await api('DELETE', '/api/news/themes?name=' + encodeURIComponent(t)); void loadRadar(); }}>×</button>
+            </span>
+          ))}
+        </div>
+        {(!radar || (radar.themes || []).length === 0) ? (
+          <p className="text-xs text-text-muted py-2">{radarLoading ? '正在扫描资讯主题...' : '近 ' + radarDays + ' 天资讯中暂未命中已知主题（可先抓取资讯，或添加自定义主题）'}</p>
+        ) : (
+          <div className="divide-y divide-border">
+            {(radar.themes || []).slice(0, 15).map((t) => (
+              <div key={t.theme} className="py-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button className="font-medium text-sm text-primary-700 hover:underline" onClick={() => setOpenTheme(openTheme === t.theme ? null : t.theme)}>
+                    {t.theme}
+                  </button>
+                  <Badge variant="info">{t.count} 条</Badge>
+                  <span className="text-xs text-text-muted">首次 {t.first_date || '—'} · 最近 {t.last_date || '—'}</span>
+                  <span className="text-xs text-text-secondary">{t.stocks.slice(0, 4).map((s) => s.name).join('、') || '（未识别到标的）'}</span>
+                  <Button size="sm" variant="secondary" className="ml-auto" onClick={async () => {
+                    setBt({ loading: true, theme: t.theme });
+                    const r = await api<never>('GET', '/api/news/theme-backtest?theme=' + encodeURIComponent(t.theme) + '&days=' + radarDays);
+                    if (r.ok && r.data) setBt(r.data as never);
+                    else setBt({ error: parseApiError(r.error), theme: t.theme });
+                  }}>回溯</Button>
+                </div>
+                {openTheme === t.theme && (
+                  <div className="mt-1.5 pl-2 border-l-2 border-primary-200 space-y-1">
+                    {t.news.map((n, i) => (
+                      <div key={i} className="text-xs">
+                        <button className="text-left text-primary-600 hover:underline" onClick={() => openUrl(n.url || '')}>{n.title}</button>
+                        <span className="text-text-muted">（{n.source || '资讯'} · {n.date || ''}）</span>
+                      </div>
+                    ))}
+                    {t.stocks.length > 0 && (
+                      <div className="text-xs text-text-secondary">关联标的：{t.stocks.map((s) => s.name + '(' + s.symbol + ')').join('、')}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {bt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setBt(null)}>
+          <div className="bg-surface rounded-xl shadow-xl w-full max-w-2xl p-5 max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-bold text-primary-900 mb-1">🧭 主题回溯：{bt.theme}</h3>
+            {bt.loading ? <p className="text-sm text-text-muted py-3">回看中...</p> : bt.error ? (
+              <p className="text-sm text-danger py-2">{bt.error}</p>
+            ) : (
+              <>
+                <p className="text-xs text-text-muted mb-3">以该主题在资讯库中<strong>首次出现日 {bt.first_date}</strong> 为基准，看关联标的当时价格与之后表现（"如果当时看到这条消息"）。</p>
+                <table className="w-full text-sm">
+                  <thead><tr className="text-xs text-text-secondary text-left">
+                    <th className="py-1">标的</th><th>基准日</th><th className="text-right">基准价</th>
+                    <th className="text-right">最新价</th><th className="text-right">至今收益</th><th className="text-right">区间最大涨幅</th>
+                  </tr></thead>
+                  <tbody>
+                    {(bt.items || []).map((it) => (
+                      <tr key={it.symbol} className="border-t border-border">
+                        <td className="py-1.5">{it.name} <span className="text-xs text-text-muted font-number">{it.symbol}</span></td>
+                        <td className="text-xs text-text-muted">{it.base_date}</td>
+                        <td className="text-right font-number">{it.base_price}</td>
+                        <td className="text-right font-number">{it.last_price}</td>
+                        <td className={'text-right font-number ' + (it.return_pct >= 0 ? 'text-success' : 'text-danger')}>{it.return_pct > 0 ? '+' : ''}{it.return_pct}%</td>
+                        <td className="text-right font-number text-success">+{it.max_gain_pct}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {(!bt.items || bt.items.length === 0) && <p className="text-xs text-text-muted">未取到关联标的的历史行情（可能代码不可用或数据不足）。</p>}
+                <p className="text-xs text-text-muted mt-3">回溯仅用于复盘"消息出现时点与标的位置的关系"，不构成投资建议。</p>
+              </>
+            )}
+            <div className="mt-4 flex justify-end"><Button size="sm" variant="secondary" onClick={() => setBt(null)}>关闭</Button></div>
+          </div>
+        </div>
+      )}
+
       {/* V1.1.6 🎯 关注方向：命中标题/简述关键词的资讯集中展示 */}
+      {/* V1.3.0 二期 📡 主题雷达 */}
+      <Card>
+        <div className="flex items-center gap-2 mb-2 flex-wrap">
+          <h2 className="font-bold text-sm">📡 主题雷达</h2>
+          <span className="text-xs text-text-muted">主题何时首次出现 · 关联标的 · 「如果当时看到」回溯</span>
+          <select value={radarDays} onChange={(e) => { const d = Number(e.target.value); setRadarDays(d); void loadRadar(d); }}
+            className="ml-auto rounded border border-border px-2 py-1 text-xs bg-white">
+            <option value={90}>近 90 天</option>
+            <option value={180}>近 180 天</option>
+            <option value={365}>近 1 年</option>
+          </select>
+          <Button size="sm" variant="secondary" onClick={() => void loadRadar()} disabled={radarLoading}>{radarLoading ? '扫描中...' : '重新扫描'}</Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 mb-2">
+          <input value={myTheme} onChange={(e) => setMyTheme(e.target.value)} placeholder="添加关注主题（如：钻石散热）"
+            className="rounded border border-border px-2 py-1 text-xs outline-none focus:border-primary-500" />
+          <Button size="sm" variant="secondary" onClick={async () => {
+            const v = myTheme.trim();
+            if (!v) return;
+            await api('POST', '/api/news/themes', { name: v });
+            setMyTheme('');
+            void loadRadar();
+          }}>＋ 添加</Button>
+          {(radar?.my_themes || []).map((t) => (
+            <span key={t} className="inline-flex items-center gap-1 text-xs bg-primary-50 border border-primary-200 rounded px-2 py-0.5 text-primary-700">
+              {t}
+              <button className="text-danger" onClick={async () => { await api('DELETE', '/api/news/themes?name=' + encodeURIComponent(t)); void loadRadar(); }}>×</button>
+            </span>
+          ))}
+        </div>
+        {(!radar || (radar.themes || []).length === 0) ? (
+          <p className="text-xs text-text-muted py-2">{radarLoading ? '正在扫描资讯主题...' : '近 ' + radarDays + ' 天资讯中暂未命中已知主题（可先抓取资讯，或添加自定义主题）'}</p>
+        ) : (
+          <div className="divide-y divide-border">
+            {(radar.themes || []).slice(0, 15).map((t) => (
+              <div key={t.theme} className="py-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button className="font-medium text-sm text-primary-700 hover:underline" onClick={() => setOpenTheme(openTheme === t.theme ? null : t.theme)}>
+                    {t.theme}
+                  </button>
+                  <Badge variant="info">{t.count} 条</Badge>
+                  <span className="text-xs text-text-muted">首次 {t.first_date || '—'} · 最近 {t.last_date || '—'}</span>
+                  <span className="text-xs text-text-secondary">{t.stocks.slice(0, 4).map((s) => s.name).join('、') || '（未识别到标的）'}</span>
+                  <Button size="sm" variant="secondary" className="ml-auto" onClick={async () => {
+                    setBt({ loading: true, theme: t.theme });
+                    const r = await api<never>('GET', '/api/news/theme-backtest?theme=' + encodeURIComponent(t.theme) + '&days=' + radarDays);
+                    if (r.ok && r.data) setBt(r.data as never);
+                    else setBt({ error: parseApiError(r.error), theme: t.theme });
+                  }}>回溯</Button>
+                </div>
+                {openTheme === t.theme && (
+                  <div className="mt-1.5 pl-2 border-l-2 border-primary-200 space-y-1">
+                    {t.news.map((n, i) => (
+                      <div key={i} className="text-xs">
+                        <button className="text-left text-primary-600 hover:underline" onClick={() => openUrl(n.url || '')}>{n.title}</button>
+                        <span className="text-text-muted">（{n.source || '资讯'} · {n.date || ''}）</span>
+                      </div>
+                    ))}
+                    {t.stocks.length > 0 && (
+                      <div className="text-xs text-text-secondary">关联标的：{t.stocks.map((s) => s.name + '(' + s.symbol + ')').join('、')}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {bt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setBt(null)}>
+          <div className="bg-surface rounded-xl shadow-xl w-full max-w-2xl p-5 max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-bold text-primary-900 mb-1">🧭 主题回溯：{bt.theme}</h3>
+            {bt.loading ? <p className="text-sm text-text-muted py-3">回看中...</p> : bt.error ? (
+              <p className="text-sm text-danger py-2">{bt.error}</p>
+            ) : (
+              <>
+                <p className="text-xs text-text-muted mb-3">以该主题在资讯库中<strong>首次出现日 {bt.first_date}</strong> 为基准，看关联标的当时价格与之后表现（"如果当时看到这条消息"）。</p>
+                <table className="w-full text-sm">
+                  <thead><tr className="text-xs text-text-secondary text-left">
+                    <th className="py-1">标的</th><th>基准日</th><th className="text-right">基准价</th>
+                    <th className="text-right">最新价</th><th className="text-right">至今收益</th><th className="text-right">区间最大涨幅</th>
+                  </tr></thead>
+                  <tbody>
+                    {(bt.items || []).map((it) => (
+                      <tr key={it.symbol} className="border-t border-border">
+                        <td className="py-1.5">{it.name} <span className="text-xs text-text-muted font-number">{it.symbol}</span></td>
+                        <td className="text-xs text-text-muted">{it.base_date}</td>
+                        <td className="text-right font-number">{it.base_price}</td>
+                        <td className="text-right font-number">{it.last_price}</td>
+                        <td className={'text-right font-number ' + (it.return_pct >= 0 ? 'text-success' : 'text-danger')}>{it.return_pct > 0 ? '+' : ''}{it.return_pct}%</td>
+                        <td className="text-right font-number text-success">+{it.max_gain_pct}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-xs text-text-muted mt-3">回溯仅用于复盘"消息出现时点与标的位置的关系"，不构成投资建议。</p>
+              </>
+            )}
+            <div className="mt-4 flex justify-end"><Button size="sm" variant="secondary" onClick={() => setBt(null)}>关闭</Button></div>
+          </div>
+        </div>
+      )}
+
       {dirHits.length > 0 && (
         <Card>
           <div className="flex items-center gap-2 mb-2">

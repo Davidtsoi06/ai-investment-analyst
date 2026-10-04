@@ -982,6 +982,33 @@ export const addPortfolioHolding = (body: { symbol: string; name?: string; marke
 export const removePortfolioHolding = (symbol: string, market: string) =>
   api<PortfolioHoldingResult>('DELETE', '/api/portfolio/holdings?symbol=' + encodeURIComponent(symbol) + '&market=' + encodeURIComponent(market));
 export const getNotifications = (limit = 10) => api<NotificationItem[]>('GET', '/api/notifications?limit=' + limit);
+
+// ---- V1.3.0 二期：主题雷达 + 主题历史回溯 ----
+export interface ThemeRadarItem {
+  theme: string;
+  count: number;
+  first_date: string;
+  last_date: string;
+  stocks: { symbol: string; name: string; market: string }[];
+  news: { title: string; url?: string; source?: string; date?: string }[];
+}
+export interface ThemeRadarResult {
+  themes: ThemeRadarItem[];
+  my_themes: string[];
+  window_days: number;
+  news_total: number;
+}
+export const getThemeRadar = (days = 180) => api<ThemeRadarResult>('GET', '/api/news/themes?days=' + days);
+export const addMyTheme = (name: string) => api<{ ok?: boolean; my_themes?: string[] }>('POST', '/api/news/themes', { name });
+export const delMyTheme = (name: string) => api<{ ok?: boolean; my_themes?: string[] }>('DELETE', '/api/news/themes?name=' + encodeURIComponent(name));
+export interface ThemeBacktestItem {
+  symbol: string; name: string; market: string;
+  base_date: string; base_price: number; last_price: number;
+  return_pct: number; max_gain_pct: number;
+}
+export const getThemeBacktest = (theme: string, days = 365) =>
+  api<{ ok?: boolean; error?: string; theme?: string; first_date?: string; items?: ThemeBacktestItem[] }>(
+    'GET', '/api/news/theme-backtest?theme=' + encodeURIComponent(theme) + '&days=' + days);
 export const getMarketSnapshot = (market: string) =>
   api<MarketSnapshot>('GET', '/api/summary/snapshot?market=' + encodeURIComponent(market));
 
