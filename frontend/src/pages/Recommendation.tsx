@@ -228,6 +228,8 @@ export default function Recommendation() {
   const [prefQuota, setPrefQuota] = useState<Record<string, number>>({ news: 3, technical: 5, fundamental: 3, capital: 2, policy: 2 });
   const [prefMemory, setPrefMemory] = useState<string>('setting');
   const [policyFocus, setPolicyFocus] = useState('');
+  const [prefEarly, setPrefEarly] = useState(false);
+  const [prefWindow, setPrefWindow] = useState(30);
 
   // AI 最近错误（V1.0.7：规则降级原因可见化，不再"莫名降级"）
   const [aiErr, setAiErr] = useState<{ last_error?: string; last_error_at?: string; configured?: boolean } | null>(null);
@@ -307,6 +309,8 @@ export default function Recommendation() {
         setPrefBasis(b);
         if (pr.data.quota) setPrefQuota({ news: 3, technical: 5, fundamental: 3, capital: 2, policy: 2, ...pr.data.quota });
         setPrefMemory(pr.data.memory || 'setting');
+        setPrefEarly(!!pr.data.early_news);
+        if (typeof pr.data.news_window_days === 'number') setPrefWindow(pr.data.news_window_days);
       }
     }).catch(() => {});
     setIntentOpen(true);
@@ -786,6 +790,9 @@ export default function Recommendation() {
                 <p className="text-xs text-danger">请至少选择一种推荐依据</p>
               )}
               <p className="text-xs text-text-muted">共 {Object.keys(prefBasis).filter((k) => prefBasis[k]).reduce((s, k) => s + (prefQuota[k] || 0), 0)} 条（上限受画像档位建议约束；消息面/政策面需配置 AI Key）</p>
+              {(prefBasis.news || prefBasis.policy) && (
+                <p className="text-xs text-text-muted">资讯窗口：{prefEarly ? (prefWindow === 0 ? '全部历史（早期信息模式）' : '近 ' + prefWindow + ' 天（早期信息模式）') : '近 30 天'} · 可在「设置 → 推荐依据」中开启早期信息搜索</p>
+              )}
             </div>
 
             <div className="text-xs text-text-secondary mb-1.5">还想限定行业/类型？（可选）</div>

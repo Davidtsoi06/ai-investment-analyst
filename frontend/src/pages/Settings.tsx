@@ -65,6 +65,9 @@ export default function Settings() {
   const [recBasis, setRecBasis] = useState<Record<string, boolean>>({ news: true, technical: true, fundamental: false, capital: false, policy: false });
   const [recQuota, setRecQuota] = useState<Record<string, number>>({ news: 3, technical: 5, fundamental: 3, capital: 2, policy: 2 });
   const [recMemory, setRecMemory] = useState<string>('setting');
+  // V1.2.0 早期信息搜索（回溯更早的资讯）
+  const [recEarly, setRecEarly] = useState(false);
+  const [recWindow, setRecWindow] = useState(30);
   const [recPrefMsg, setRecPrefMsg] = useState('');
 
   // V1.2.0：载入推荐偏好
@@ -77,6 +80,8 @@ export default function Settings() {
         setRecBasis(b);
         if (d.quota) setRecQuota({ news: 3, technical: 5, fundamental: 3, capital: 2, policy: 2, ...d.quota });
         if (d.memory) setRecMemory(d.memory);
+        setRecEarly(!!d.early_news);
+        if (typeof d.news_window_days === 'number') setRecWindow(d.news_window_days);
       }
     }).catch(() => {});
   }, []);
@@ -84,7 +89,10 @@ export default function Settings() {
   const saveRecPrefs = async () => {
     const basis = Object.keys(recBasis).filter((k) => recBasis[k]);
     if (basis.length === 0) { setRecPrefMsg('❌ 请至少选择一种推荐依据'); return; }
-    const r = await saveRecommendPrefs({ basis, quota: recQuota, memory: recMemory });
+    const r = await saveRecommendPrefs({
+      basis, quota: recQuota, memory: recMemory,
+      early_news: recEarly, news_window_days: recEarly ? recWindow : 30,
+    });
     setRecPrefMsg(r.ok ? '✅ 推荐偏好已保存' : '❌ 保存失败：' + parseApiError(r.error));
   };
 
@@ -505,6 +513,31 @@ export default function Settings() {
             记住我在生成时的临时选择（生成后会询问是否保存）
           </label>
         </div>
+        {/* V1.2.0 早期信息搜索：回溯更早的消息（把"3 月就有、7 月才知道"的机会捞回来） */}
+        <div className="mt-3 pt-3 border-t border-border">
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={recEarly} onChange={(e) => setRecEarly(e.target.checked)} />
+            🔎 早期信息搜索（回溯更早的消息，寻找"尚未被市场充分反应"的早期机会）
+          </label>
+          <p className="text-xs text-text-muted mt-1">
+            开启后，消息面/政策面会扫描更早的资讯并标注「消息首次出现时间」；关闭则只看最近 30 天。
+            注意：能回溯多久取决于本机资讯库里已抓取到的历史（软件需在相应时间已在运行抓取）。
+          </p>
+          {recEarly && (
+            <div className="flex items-center gap-2 mt-2 text-sm">
+              <span className="text-text-secondary">回溯范围</span>
+              <select value={recWindow} onChange={(e) => setRecWindow(Number(e.target.value))}
+                className="rounded border border-border px-2 py-1 text-sm bg-white">
+                <option value={90}>近 90 天</option>
+                <option value={180}>近 180 天</option>
+                <option value={365}>近 1 年</option>
+                <option value={0}>全部历史</option>
+              </select>
+              <span className="text-xs text-text-muted">（范围越大分析越慢、信源越旧）</span>
+            </div>
+          )}
+        </div>
+
         <div className="flex items-center gap-3 mt-3">
           <Button size="sm" onClick={() => void saveRecPrefs()}>保存推荐偏好</Button>
           {recPrefMsg && <span className={'text-xs ' + (recPrefMsg.startsWith('✅') ? 'text-success' : 'text-danger')}>{recPrefMsg}</span>}

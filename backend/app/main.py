@@ -765,10 +765,12 @@ def recommend_run(data: RecommendRunIn | None = None, x_backend_token: str = Hea
 
 
 class RecommendPrefIn(BaseModel):
-    """推荐偏好（V1.2.0）：依据勾选 + 各依据数量 + 记忆策略"""
+    """推荐偏好（V1.2.0）：依据勾选 + 各依据数量 + 记忆策略 + 资讯时间窗"""
     basis: list[str] | None = None
     quota: dict | None = None
     memory: str = 'setting'  # setting=跟随设置 / remember=记住本次选择
+    early_news: bool | None = None      # 是否开启早期信息搜索
+    news_window_days: int | None = None  # 0=全部历史 / 30 / 90 / 180 / 365
 
 
 @app.get("/api/recommend/prefs")
@@ -777,10 +779,14 @@ def recommend_prefs_get(x_backend_token: str = Header(default="")):
     require_token(x_backend_token)
     from .agents.recommend_agent import load_basis, load_quota
     from .services.settings_service import get_setting
+    from .agents.recommend_agent import load_news_window
+    window = load_news_window()
     return {
         'basis': load_basis(),
         'quota': load_quota(),
         'memory': (get_setting('recommend.basis_memory') or 'setting'),
+        'early_news': window == 0 or window > 30,
+        'news_window_days': window,
     }
 
 
@@ -805,6 +811,14 @@ def recommend_prefs_put(data: RecommendPrefIn, x_backend_token: str = Header(def
         set_setting('recommend.basis_quota', _json.dumps(q, ensure_ascii=False))
     if data.memory in ('setting', 'remember'):
         set_setting('recommend.basis_memory', data.memory)
+    if data.early_news is not None or data.news_window_days is not None:
+        if data.news_window_days is not None and int(data.news_window_days) >= 0:
+            window = int(data.news_window_days)
+        elif data.early_news:
+            window = 180  # 开启早期模式默认回溯 180 天
+        else:
+            window = 30
+        set_setting('recommend.news_window', window)
     return {'ok': True}
 
 

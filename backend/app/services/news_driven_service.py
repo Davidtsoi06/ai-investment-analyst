@@ -24,19 +24,27 @@ POLICY_KEYWORDS = (
     '中央', '通知', '办法', '条例', '十四五', '十五五', '专项债', '税收优惠', '产业基金',
 )
 
-_NEWS_LIMIT = 60
-_DAYS_WINDOW = 30
+_NEWS_LIMIT = 60          # 近期模式（默认）：最多 60 条
+_NEWS_LIMIT_EARLY = 300   # 早期模式（用户开启后）：最多 300 条，可回溯更久的资讯
 
 
-def _collect_news(kind: str, focus: str = '') -> list[dict]:
-    """取本地资讯（近 30 天，最多 60 条）；kind='policy' 时仅保留政策类资讯"""
+def _collect_news(kind: str, focus: str = '', window_days: int = 30) -> list[dict]:
+    """取本地资讯；window_days>0 时仅取该时间窗内（0=不限/全部历史）；
+    window_days>30 视为「早期信息模式」→ 放宽条数上限到 300 条并回溯更早消息。
+    kind='policy' 时仅保留政策类资讯"""
+    from datetime import date, timedelta
+    limit = _NEWS_LIMIT_EARLY if (window_days == 0 or window_days > 30) else _NEWS_LIMIT
+    sql = ("SELECT title, summary, source, url, published_at, region FROM news_cache ")
+    params: list = []
+    if window_days and window_days > 0:
+        since = (date.today() - timedelta(days=window_days)).isoformat()
+        sql += "WHERE substr(published_at, 1, 10) >= ? "
+        params.append(since)
+    sql += "ORDER BY id DESC LIMIT ?"
+    params.append(limit)
     conn = get_connection()
     try:
-        rows = conn.execute(
-            "SELECT title, summary, source, url, published_at, region FROM news_cache "
-            "ORDER BY id DESC LIMIT ?",
-            (_NEWS_LIMIT * 2,),
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     finally:
         conn.close()
     out: list[dict] = []
@@ -79,9 +87,12 @@ def _ai_themes(news_items: list[dict], kind: str, focus: str = '') -> tuple[list
     for n in news_items[:40]:
         lines.append(f"- [{n['date']}] {n['title']}（{n['source']}）{n['summary'][:80]}")
     kind_txt = '政策文件与政策动向' if kind == 'policy' else '财经/产业新闻'
+    window_txt = ('全部历史（含较早消息，请特别留意「消息首次出现时间」与标的当前走势的差异——'
+                  '若消息较早但标的仍未大涨，属于可提前布局的早期机会）' if (window_days == 0 or window_days > 30)
+                  else f'近 {window_days} 天')
     focus_txt = f'\n用户特别关注领域：{focus}（优先分析该领域，其它领域仅在明显重要时纳入）' if focus else ''
     prompt = (
-        f'你是资深 A 股/港股投资研究员。以下是我抓取到的近期{kind_txt}（含来源与日期）。\n'
+        f'你是资深 A 股/港股投资研究员。以下是我抓取到的{kind_txt}（时间范围：{window_txt}；含来源与日期）。\n'
         '请完成：① 把资讯归纳为若干「投资主题」；② 对每个主题推断**受益标的**（A股 6 位代码 / 港股 5 位代码）。\n'
         '重要：不仅列出被资讯直接点名的公司，也要基于产业链知识给出**尚未被点名的受益个股**'
         '（例如「钻石散热」→ 黄河旋风、力量钻石、四方达等），并在 reason 中说明受益逻辑。\n'
@@ -260,14 +271,14 @@ def _fallback_entries(news_items: list[dict], kind: str, quota: int) -> tuple[li
     return entries, 'fallback'
 
 
-def build_driver_entries(kind: str, quota: int = 3, focus: str = '') -> dict:
-    """入口：kind='news'|'policy'；返回 {entries, notes, error}
-    - entries：推荐条目（含 driver / sources）
-    - notes：提示信息（降级说明、信源不足等）
-    """
-    news_items = _collect_news(kind, focus)
+def build_driver_entries(kind: str, quota: int = 3, focus: str = '', window_days: int = 30) -> dict:
+    """入口：kind='news'|'policy'；window_days=0 或 >30 表示早期信息模式（回溯更久）
+    返回 {entries, notes, error}"""
+    news_items = _collect_news(kind, focus, window_days)
     if not news_items:
-        msg = '资讯库近 30 天无政策类条目（可先抓取资讯）' if kind == 'policy' else '资讯库近 30 天无条目（可先到资讯看板抓取）'
+        scope_txt = '全部历史' if window_days == 0 else f'近 {window_days} 天'
+        msg = (f'资讯库{scope_txt}内无政策类条目（可先抓取资讯）' if kind == 'policy'
+               else f'资讯库{scope_txt}内无条目（可先到资讯看板抓取；早期模式需库中存有较早的资讯）')
         return {'entries': [], 'notes': [msg], 'error': msg}
     themes, err = _ai_themes(news_items, kind, focus)
     if not themes:

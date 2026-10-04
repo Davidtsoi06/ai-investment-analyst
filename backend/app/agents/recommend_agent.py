@@ -400,6 +400,20 @@ def load_quota() -> dict:
     return quota
 
 
+def load_news_window() -> int:
+    """V1.2.0 资讯时间窗（天）：0=全部历史；未开启早期模式时默认 30 天"""
+    from ..services.settings_service import get_setting
+    try:
+        v = get_setting('recommend.news_window')
+        if isinstance(v, str) and v:
+            v = json.loads(v)
+        if isinstance(v, (int, float)):
+            return max(0, int(v))
+    except Exception:  # noqa: BLE001
+        pass
+    return 30
+
+
 def merge_entries(entries: list[dict]) -> list[dict]:
     """同 (symbol, rec_type) 合并：driver 合并、sources 去重（≤3）、logic 拼接（消息/政策优先）"""
     best: dict = {}
@@ -925,14 +939,17 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
     driver_entries: list[dict] = []
     if news_on or policy_on:
         from ..services.news_driven_service import build_driver_entries
+        # V1.2.0：资讯时间窗（用户可在设置中开启「早期信息搜索」以回溯更早消息）
+        window_days = load_news_window()
         if news_on:
-            r1 = build_driver_entries('news', int(q.get('news') or 3), '')
+            r1 = build_driver_entries('news', int(q.get('news') or 3), '', window_days)
             driver_entries += r1.get('entries') or []
             driver_notes += r1.get('notes') or []
         if policy_on:
-            r2 = build_driver_entries('policy', int(q.get('policy') or 2), policy_focus)
+            r2 = build_driver_entries('policy', int(q.get('policy') or 2), policy_focus, window_days)
             driver_entries += r2.get('entries') or []
             driver_notes += r2.get('notes') or []
+        driver_notes.append('资讯窗口：' + ('全部历史（早期信息模式）' if window_days == 0 else f'近 {window_days} 天'))
         if mode != 'both':
             want = '短线' if mode == 'short' else '长线'
             driver_entries = [e for e in driver_entries if e.get('rec_type') == want]

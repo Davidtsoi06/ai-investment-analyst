@@ -336,6 +336,10 @@ export interface RecommendPrefs {
   basis: string[];
   quota: Record<string, number>;
   memory: 'setting' | 'remember' | string;
+  /** V1.2.0：早期信息搜索（回溯更早消息） */
+  early_news?: boolean;
+  /** 资讯时间窗（天）：0=全部历史 / 30 / 90 / 180 / 365 */
+  news_window_days?: number;
 }
 export const getRecommendPrefs = () => api<RecommendPrefs>('GET', '/api/recommend/prefs');
 export const saveRecommendPrefs = (p: Partial<RecommendPrefs>) => api<{ ok?: boolean }>('PUT', '/api/recommend/prefs', p);
