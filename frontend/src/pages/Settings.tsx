@@ -4,7 +4,7 @@ import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import {
   api, getSettings, saveSettings, saveAiKey, testAiKey, getBackendStatus, getProfile, saveProfile,
-  getAiStatus, getAiBalance, parseApiError,
+  getAiStatus, getAiBalance, parseApiError, getRecommendPrefs, saveRecommendPrefs,
   type AiStatus,
   type Profile as ProfileType,
   type Settings as SettingsType,
@@ -61,6 +61,32 @@ export default function Settings() {
   const [pfMode, setPfMode] = useState<string>('snapshot');
   const [pfLoadedMode, setPfLoadedMode] = useState<string | null>(null);
   const [pfStatus, setPfStatus] = useState<{ source?: string; finance_db?: string | null; snapshot_detected?: boolean; snapshot_dir?: string | null; snapshot_modified_at?: string | null } | null>(null);
+  // V1.2.0 推荐偏好：依据勾选 + 各依据数量 + 记忆策略
+  const [recBasis, setRecBasis] = useState<Record<string, boolean>>({ news: true, technical: true, fundamental: false, capital: false, policy: false });
+  const [recQuota, setRecQuota] = useState<Record<string, number>>({ news: 3, technical: 5, fundamental: 3, capital: 2, policy: 2 });
+  const [recMemory, setRecMemory] = useState<string>('setting');
+  const [recPrefMsg, setRecPrefMsg] = useState('');
+
+  // V1.2.0：载入推荐偏好
+  useEffect(() => {
+    getRecommendPrefs().then((r) => {
+      if (r.ok && r.data) {
+        const d = r.data;
+        const b: Record<string, boolean> = { news: false, technical: false, fundamental: false, capital: false, policy: false };
+        for (const k of (d.basis || [])) b[k] = true;
+        setRecBasis(b);
+        if (d.quota) setRecQuota({ news: 3, technical: 5, fundamental: 3, capital: 2, policy: 2, ...d.quota });
+        if (d.memory) setRecMemory(d.memory);
+      }
+    }).catch(() => {});
+  }, []);
+
+  const saveRecPrefs = async () => {
+    const basis = Object.keys(recBasis).filter((k) => recBasis[k]);
+    if (basis.length === 0) { setRecPrefMsg('❌ 请至少选择一种推荐依据'); return; }
+    const r = await saveRecommendPrefs({ basis, quota: recQuota, memory: recMemory });
+    setRecPrefMsg(r.ok ? '✅ 推荐偏好已保存' : '❌ 保存失败：' + parseApiError(r.error));
+  };
 
   useEffect(() => {
     if (!window.updater) return;
@@ -437,6 +463,54 @@ export default function Settings() {
       <div className="flex justify-end">
         <Button onClick={save} disabled={saving}>{saving ? '保存中...' : '保存设置'}</Button>
       </div>
+
+      {/* V1.2.0 推荐偏好：依据多选 + 数量配额 + 记忆策略 */}
+      <Card>
+        <div className="flex items-center gap-3 mb-2">
+          <h2 className="font-bold text-sm">推荐依据（推荐中心）</h2>
+          <span className="text-xs text-text-muted">勾选后可多选；数字 = 该依据最多产出的推荐条数</span>
+        </div>
+        <div className="space-y-2">
+          {([
+            ['news', '📰 消息面（外部资讯驱动，提前发现机会；需 AI Key）'],
+            ['technical', '📈 技术面（K线形态与趋势）'],
+            ['fundamental', '💰 基本面（估值与财务）'],
+            ['capital', '💵 资金面（量能与大单异动）'],
+            ['policy', '🏛️ 政策面（政策文件驱动的受益行业；需 AI Key）'],
+          ] as [string, string][]).map(([key, label]) => (
+            <div key={key} className="flex items-center gap-3 text-sm">
+              <label className="flex items-center gap-2 cursor-pointer flex-1">
+                <input type="checkbox" checked={!!recBasis[key]} onChange={(e) => setRecBasis({ ...recBasis, [key]: e.target.checked })} />
+                {label}
+              </label>
+              <input
+                type="number" min={0} max={20}
+                value={recQuota[key] ?? 0}
+                onChange={(e) => setRecQuota({ ...recQuota, [key]: Math.max(0, Math.min(20, Number(e.target.value) || 0)) })}
+                disabled={!recBasis[key]}
+                className="w-16 rounded border border-border px-2 py-1 text-sm text-right outline-none focus:border-primary-500 disabled:opacity-40"
+              />
+              <span className="text-xs text-text-muted w-6">条</span>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 text-xs text-text-secondary">依据记忆策略</div>
+        <div className="flex flex-wrap gap-4 mt-1 text-sm">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="radio" checked={recMemory === 'setting'} onChange={() => setRecMemory('setting')} />
+            每次生成都使用上面的设置
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="radio" checked={recMemory === 'remember'} onChange={() => setRecMemory('remember')} />
+            记住我在生成时的临时选择（生成后会询问是否保存）
+          </label>
+        </div>
+        <div className="flex items-center gap-3 mt-3">
+          <Button size="sm" onClick={() => void saveRecPrefs()}>保存推荐偏好</Button>
+          {recPrefMsg && <span className={'text-xs ' + (recPrefMsg.startsWith('✅') ? 'text-success' : 'text-danger')}>{recPrefMsg}</span>}
+        </div>
+        <p className="text-xs text-text-muted mt-2">提示：勾选多项时各分析链并行、结果合并去重；推荐结果会标注依据来源（📰/📈/💰/💵/🏛️）并可查看新闻信源。</p>
+      </Card>
 
       <Card>
         <div className="flex items-center gap-3 mb-3">

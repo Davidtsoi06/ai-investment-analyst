@@ -225,6 +225,10 @@ export interface RecommendItem {
   status?: string; // open ...
   /** V1.1.0：rec=推荐级 / watch=观察清单（低置信度补充） */
   tier?: string | null;
+  /** V1.2.0：推荐依据（news/technical/fundamental/capital/policy，多值逗号分隔） */
+  driver?: string | null;
+  /** V1.2.0：信源（新闻标题 + 链接，可点击打开原文/预览） */
+  sources?: { title: string; url?: string; source?: string; date?: string }[] | null;
   [k: string]: unknown;
 }
 
@@ -309,13 +313,32 @@ export interface EvaluateResult {
   skipped?: { id: number; symbol: string; reason: string }[];
 }
 
-/** 生成推荐（V1.1.0）：intent 意愿文本；mode all/short/long；scope {type:'market'|'pool', groups} */
-export const generateRecommendations = (opts?: { intent?: string; mode?: string; scope?: { type?: string; groups?: string[] } }) =>
+/** 生成推荐（V1.1.0；V1.2.0 支持依据 basis/配额 quota/政策领域 policy_focus） */
+export const generateRecommendations = (opts?: {
+  intent?: string;
+  mode?: string;
+  scope?: { type?: string; groups?: string[] };
+  basis?: string[];
+  quota?: Record<string, number>;
+  policy_focus?: string;
+}) =>
   api<TodayRecommendations>('POST', '/api/recommend/run', {
     intent: opts?.intent || '',
     mode: opts?.mode || 'both',
     scope: opts?.scope ? { type: opts.scope.type || 'market', groups: opts.scope.groups || [] } : { type: 'market', groups: [] },
+    basis: opts?.basis,
+    quota: opts?.quota,
+    policy_focus: opts?.policy_focus || '',
   });
+
+// ---- V1.2.0 推荐偏好（依据 / 配额 / 记忆策略） ----
+export interface RecommendPrefs {
+  basis: string[];
+  quota: Record<string, number>;
+  memory: 'setting' | 'remember' | string;
+}
+export const getRecommendPrefs = () => api<RecommendPrefs>('GET', '/api/recommend/prefs');
+export const saveRecommendPrefs = (p: Partial<RecommendPrefs>) => api<{ ok?: boolean }>('PUT', '/api/recommend/prefs', p);
 export const getTodayRecommendations = () => api<TodayRecommendations>('GET', '/api/recommend/today');
 export const getRecommendationsHistory = (limit = 50) =>
   api<HistoryItem[]>('GET', `/api/recommend/history?limit=${limit}`);

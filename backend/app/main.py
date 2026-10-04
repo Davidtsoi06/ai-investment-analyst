@@ -650,13 +650,19 @@ class RecommendScopeIn(BaseModel):
 
 
 class RecommendRunIn(BaseModel):
-    """生成推荐请求（V1.1.0）：
+    """生成推荐请求（V1.1.0；V1.2.0 增加依据与配额）：
     intent：用户意愿文本（如「酒类和科技股」），留空 = 不指定；
     mode：both 全部 / short 仅短线 / long 仅长线；
-    scope：候选范围（全市场 或 我的股票池分组多选）"""
+    scope：候选范围（全市场 或 我的股票池分组多选）；
+    basis：本次推荐依据（news/technical/fundamental/capital/policy），留空 = 读设置；
+    quota：各依据数量（如 {"news":3,"technical":5}），留空 = 读设置；
+    policy_focus：政策面关注领域（如「新能源、半导体」），可空"""
     intent: str = ''
     mode: str = 'both'
     scope: RecommendScopeIn | None = None
+    basis: list[str] | None = None
+    quota: dict | None = None
+    policy_focus: str = ''
 
 
 class PoolAnalyzeIn(BaseModel):
@@ -752,7 +758,54 @@ def recommend_run(data: RecommendRunIn | None = None, x_backend_token: str = Hea
         mode=(d.mode or 'both').strip() or 'both',
         scope_type=(scope.type if scope else 'market'),
         groups=(scope.groups if scope else None),
+        basis=d.basis,
+        quota=d.quota,
+        policy_focus=(d.policy_focus or '').strip(),
     )
+
+
+class RecommendPrefIn(BaseModel):
+    """推荐偏好（V1.2.0）：依据勾选 + 各依据数量 + 记忆策略"""
+    basis: list[str] | None = None
+    quota: dict | None = None
+    memory: str = 'setting'  # setting=跟随设置 / remember=记住本次选择
+
+
+@app.get("/api/recommend/prefs")
+def recommend_prefs_get(x_backend_token: str = Header(default="")):
+    """读取推荐偏好（依据/配额/记忆策略；未保存时返回默认值）"""
+    require_token(x_backend_token)
+    from .agents.recommend_agent import load_basis, load_quota
+    from .services.settings_service import get_setting
+    return {
+        'basis': load_basis(),
+        'quota': load_quota(),
+        'memory': (get_setting('recommend.basis_memory') or 'setting'),
+    }
+
+
+@app.put("/api/recommend/prefs")
+def recommend_prefs_put(data: RecommendPrefIn, x_backend_token: str = Header(default="")):
+    """保存推荐偏好"""
+    require_token(x_backend_token)
+    import json as _json
+    from .agents.recommend_agent import VALID_BASIS
+    from .services.settings_service import set_setting
+    if data.basis is not None:
+        picked = [b for b in data.basis if b in VALID_BASIS]
+        set_setting('recommend.basis', _json.dumps(picked, ensure_ascii=False))
+    if data.quota is not None:
+        q = {}
+        for k, v in data.quota.items():
+            if k in VALID_BASIS:
+                try:
+                    q[k] = max(0, min(20, int(v)))
+                except (TypeError, ValueError):
+                    pass
+        set_setting('recommend.basis_quota', _json.dumps(q, ensure_ascii=False))
+    if data.memory in ('setting', 'remember'):
+        set_setting('recommend.basis_memory', data.memory)
+    return {'ok': True}
 
 
 @app.get("/api/recommend/history")

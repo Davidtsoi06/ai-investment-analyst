@@ -264,6 +264,38 @@ def _short_rule(symbol: str, name: str, market: str, quote, snap: dict, fill: bo
         'risk_level': risk,
         'price': close,
         'tier': tier,
+        'driver': 'technical',  # V1.2.0 依据标记
+    }
+
+
+def _capital_rule(symbol: str, name: str, market: str, quote, snap: dict) -> dict | None:
+    """V1.2.0 资金面依据：量比放大 / 放量突破 / 高换手 — 捕捉资金异动"""
+    vol_ratio = snap.get('vol_ratio')
+    breakout = bool(snap.get('breakout', {}).get('hit'))
+    turnover = float(getattr(quote, 'turnover', 0) or 0)
+    strong = (vol_ratio is not None and float(vol_ratio) >= 1.8) or breakout or turnover >= 5.0
+    if not strong:
+        return None
+    close = float(quote.price)
+    signals = []
+    if vol_ratio is not None and float(vol_ratio) >= 1.8:
+        signals.append(f'量比 {float(vol_ratio):.1f}')
+    if breakout:
+        signals.append('放量突破' + str(snap['breakout'].get('ref_high')))
+    if turnover >= 5.0:
+        signals.append(f'换手 {turnover:.1f}%')
+    confidence = 55 + (10 if breakout else 0) + (5 if vol_ratio and float(vol_ratio) >= 2.5 else 0)
+    return {
+        'symbol': symbol, 'name': name, 'market': market, 'rec_type': '短线',
+        'entry_min': round(close * 0.99, 2), 'entry_max': round(close * 1.02, 2),
+        'stop_loss': round(close * 0.95, 2), 'target': round(close * (1.08 if confidence >= 65 else 1.05), 2),
+        'valuation_min': None, 'valuation_max': None,
+        'confidence': min(85, confidence),
+        'logic': '💵 资金面：' + '；'.join(signals) + '（资金异动，注意持续性）',
+        'risk_level': '中' if confidence >= 65 else '高',
+        'price': close,
+        'tier': 'rec' if confidence >= 60 else 'watch',
+        'driver': 'capital',
     }
 
 
@@ -316,10 +348,109 @@ def _long_rule(symbol: str, name: str, market: str, quote, snap: dict, fill: boo
         'risk_level': risk,
         'price': close,
         'tier': tier,
+        'driver': 'fundamental',  # V1.2.0 依据标记
     }
 
 
 # ---------------- AI 生成与解析 ----------------
+
+# V1.2.0 推荐依据（用户可多选）
+VALID_BASIS = ('news', 'technical', 'fundamental', 'capital', 'policy')
+BASIS_CN = {'news': '📰 消息面', 'technical': '📈 技术面', 'fundamental': '💰 基本面',
+            'capital': '💵 资金面', 'policy': '🏛️ 政策面'}
+_DEFAULT_BASIS = ['news', 'technical']
+_DEFAULT_QUOTA = {'news': 3, 'technical': 5, 'fundamental': 3, 'capital': 2, 'policy': 2}
+_BASIS_ORDER = {'news': 0, 'policy': 1, 'technical': 2, 'fundamental': 3, 'capital': 4}
+
+
+def load_basis() -> list[str]:
+    """读取设置中的推荐依据（默认 消息面+技术面）"""
+    from ..services.settings_service import get_setting
+    try:
+        raw = get_setting('recommend.basis') or ''
+        arr = json.loads(raw) if raw else None
+        if isinstance(arr, list):
+            picked = [str(x) for x in arr if str(x) in VALID_BASIS]
+            if picked:
+                return picked
+    except Exception:  # noqa: BLE001
+        pass
+    return list(_DEFAULT_BASIS)
+
+
+def load_quota() -> dict:
+    """读取设置中的各依据数量配额"""
+    from ..services.settings_service import get_setting
+    quota = dict(_DEFAULT_QUOTA)
+    try:
+        raw = get_setting('recommend.basis_quota') or ''
+        d = json.loads(raw) if raw else None
+        if isinstance(d, dict):
+            for k, v in d.items():
+                if k in VALID_BASIS:
+                    try:
+                        quota[k] = max(0, int(v))
+                    except (TypeError, ValueError):
+                        pass
+    except Exception:  # noqa: BLE001
+        pass
+    return quota
+
+
+def merge_entries(entries: list[dict]) -> list[dict]:
+    """同 (symbol, rec_type) 合并：driver 合并、sources 去重（≤3）、logic 拼接（消息/政策优先）"""
+    best: dict = {}
+    for e in entries:
+        key = (e.get('symbol'), e.get('rec_type'))
+        if key not in best:
+            merged = dict(e)
+            merged.setdefault('sources', [])
+            best[key] = merged
+            continue
+        cur = best[key]
+        drv = set((cur.get('driver') or '').split(',')) | set((e.get('driver') or '').split(','))
+        drv.discard('')
+        cur['driver'] = ','.join(sorted(drv, key=lambda d: _BASIS_ORDER.get(d, 9)))
+        seen = set()
+        srcs = []
+        for s in (cur.get('sources') or []) + (e.get('sources') or []):
+            u = s.get('url') or s.get('title')
+            if u and u not in seen:
+                seen.add(u)
+                srcs.append(s)
+        cur['sources'] = srcs[:3]
+        if e.get('logic') and e['logic'] not in str(cur.get('logic') or ''):
+            if str(cur.get('logic') or '').startswith(('📰', '🏛️')):
+                cur['logic'] = str(cur['logic']) + ' ｜ ' + e['logic']
+            else:
+                cur['logic'] = e['logic'] + ' ｜ ' + str(cur.get('logic') or '')
+        if (e.get('confidence') or 0) > (cur.get('confidence') or 0):
+            cur['confidence'] = e['confidence']
+            cur['tier'] = e.get('tier') or cur.get('tier')
+    return list(best.values())
+
+
+def apply_quota(entries: list[dict], basis: list[str], quota: dict) -> list[dict]:
+    """按依据配额截断（多依据条目优先计入优先级最高的启用依据；该依据满额则尝试其它命中依据）"""
+    out: list[dict] = []
+    counts: dict = {b: 0 for b in basis}
+    for e in sorted(entries, key=lambda x: -(x.get('confidence') or 0)):
+        drv = [d for d in str(e.get('driver') or '').split(',') if d in basis]
+        if not drv:
+            continue
+        drv.sort(key=lambda d: _BASIS_ORDER.get(d, 9))
+        chosen = None
+        for d in drv:
+            limit = int(quota.get(d) or 0)
+            if limit > 0 and counts.get(d, 0) < limit:
+                chosen = d
+                break
+        if chosen is None:
+            continue
+        counts[chosen] = counts.get(chosen, 0) + 1
+        out.append(e)
+    return out
+
 
 def _target_range(profile: dict) -> tuple[int, int]:
     """推荐数量档位（V1.1.5，用户决策）：保守 3~5 / 稳健 5~8 / 激进 8~10；未知档按稳健"""
@@ -443,6 +574,7 @@ def _ai_entries(candidates: list[dict], mode: str = 'both',
                 e = _sanitize_ai_item(it, candidates_by_symbol)
                 if e:
                     e['tier'] = 'rec' if (e.get('confidence') or 0) >= 60 else 'watch'
+                    e['driver'] = 'technical'  # V1.2.0：AI 短线 = 技术面依据
                     entries.append(e)
         if mode in ('long', 'both'):
             long_raw = _call_ai(build_long_prompt(long_cands, target_min, target_max))
@@ -451,6 +583,7 @@ def _ai_entries(candidates: list[dict], mode: str = 'both',
                 e = _sanitize_ai_item(it, candidates_by_symbol)
                 if e:
                     e['tier'] = 'rec' if (e.get('confidence') or 0) >= 60 else 'watch'
+                    e['driver'] = 'fundamental'  # V1.2.0：AI 长线 = 基本面依据
                     entries.append(e)
     except Exception as e:  # noqa: BLE001
         ai_ok = False
@@ -470,7 +603,8 @@ def _load_today(today: str, mode: str = 'both') -> list[dict]:
         if mode == 'both':
             rows = conn.execute(
                 "SELECT id, symbol, name, market, rec_type, entry_min, entry_max, stop_loss, target, "
-                "valuation_min, valuation_max, confidence, logic, risk_level, rec_date, rec_price, status, tier "
+                "valuation_min, valuation_max, confidence, logic, risk_level, rec_date, rec_price, status, tier, "
+                "driver, sources "
                 "FROM recommendations WHERE rec_date = ? ORDER BY rec_type, id",
                 (today,),
             ).fetchall()
@@ -478,7 +612,8 @@ def _load_today(today: str, mode: str = 'both') -> list[dict]:
             rtype = '短线' if mode == 'short' else '长线'
             rows = conn.execute(
                 "SELECT id, symbol, name, market, rec_type, entry_min, entry_max, stop_loss, target, "
-                "valuation_min, valuation_max, confidence, logic, risk_level, rec_date, rec_price, status, tier "
+                "valuation_min, valuation_max, confidence, logic, risk_level, rec_date, rec_price, status, tier, "
+                "driver, sources "
                 "FROM recommendations WHERE rec_date = ? AND rec_type = ? ORDER BY id",
                 (today, rtype),
             ).fetchall()
@@ -575,13 +710,17 @@ def _save_entries(entries: list[dict], today: str, mode: str = 'both') -> int:
             conn.execute(
                 '''INSERT INTO recommendations
                 (symbol, name, market, rec_type, entry_min, entry_max, stop_loss, target,
-                 valuation_min, valuation_max, confidence, logic, risk_level, rec_date, rec_price, status, tier, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)''',
+                 valuation_min, valuation_max, confidence, logic, risk_level, rec_date, rec_price, status, tier,
+                 driver, sources, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)''',
                 (e['symbol'], e['name'], e['market'], e['rec_type'],
                  e.get('entry_min'), e.get('entry_max'), e.get('stop_loss'), e.get('target'),
                  e.get('valuation_min'), e.get('valuation_max'),
                  e['confidence'], e['logic'], e['risk_level'], today, e['price'],
-                 e.get('tier') or 'rec', now),
+                 e.get('tier') or 'rec',
+                 e.get('driver') or '',  # V1.2.0 依据标记
+                 json.dumps(e.get('sources') or [], ensure_ascii=False),
+                 now),
             )
         conn.commit()
         return len(entries)
@@ -633,12 +772,17 @@ def _macro_constraint(entries: list[dict]) -> tuple[list[dict], list[dict]]:
 
 
 def generate_recommendations(force: bool = False, intent: str = '', mode: str = 'both',
-                              scope_type: str = 'market', groups: list[str] | None = None) -> dict:
-    """生成当日推荐（V1.1.0）：
+                              scope_type: str = 'market', groups: list[str] | None = None,
+                              basis: list[str] | None = None, quota: dict | None = None,
+                              policy_focus: str = '') -> dict:
+    """生成当日推荐（V1.1.0；V1.2.0 支持推荐依据多选）：
     - mode: both/short/long（短线/长线可独立生成，各自当日缓存互不覆盖）
     - scope_type: market=全市场自动候选（自选+蓝筹补足）；pool=仅从我的股票池指定分组分析（不足不补）
     - groups: scope_type='pool' 时的分组名列表（空=全部组）
-    返回：{ok, date, cached, source, mode, scope, items, blocked, errors}
+    - basis: 本次推荐依据（news/technical/fundamental/capital/policy；None=读设置）
+    - quota: 各依据数量配额（None=读设置）
+    - policy_focus: 政策面关注领域（可空）
+    返回：{ok, date, cached, source, mode, scope, items, blocked, errors, basis, driver_notes}
     source: ai=AI生成 ai_empty=AI已分析但无合适标的 rules=规则引擎（AI不可用降级）
     """
     profile = _load_profile()
@@ -647,6 +791,21 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
     mode = mode if mode in ('short', 'long', 'both') else 'both'
     scope_type = 'pool' if scope_type == 'pool' else 'market'
     groups = [str(g).strip() for g in (groups or []) if str(g).strip()] or None
+    # V1.2.0 推荐依据与配额（参数优先，其次设置默认）
+    basis = [b for b in (basis or load_basis()) if b in VALID_BASIS]
+    if not basis:
+        msg = '请至少选择一种推荐依据（消息面/技术面/基本面/资金面/政策面）'
+        return {'ok': False, 'error': msg, 'reason': msg, 'date': today, 'mode': mode,
+                'scope': scope_type, 'cached': False, 'source': 'rules', 'items': [],
+                'blocked': [], 'errors': [], 'basis': [], 'candidate_count': 0, 'pool_size': 0,
+                'empty_reason': '未选择推荐依据', 'intent': intent}
+    q = dict(load_quota())
+    q.update({k: v for k, v in (quota or {}).items() if k in VALID_BASIS})
+    tech_on = 'technical' in basis
+    fund_on = 'fundamental' in basis
+    cap_on = 'capital' in basis
+    news_on = 'news' in basis
+    policy_on = 'policy' in basis
 
     # 记录本次意愿（供 today/cached 响应回显；空意愿则清除）
     _save_intent(intent, today)
@@ -659,7 +818,7 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
                     'source': 'ai' if any('AI' in (it.get('logic') or '') for it in existing) else 'rules',
                     'items': existing, 'blocked': [], 'errors': [],
                     'candidate_count': 0, 'pool_size': 0, 'empty_reason': None,
-                    'intent': _load_intent()}
+                    'intent': _load_intent(), 'basis': basis, 'driver_counts': {}, 'driver_notes': []}
 
     candidates = _candidate_pool(profile, intent, scope_type, groups)
     scope_desc = ('我的股票池' + ('：' + '、'.join(groups) if groups else '（全部组）')) if scope_type == 'pool' else '全市场自动候选'
@@ -708,22 +867,28 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
             elif err:
                 errors.append(err)
 
-    # 1) 规则引擎保底（按 mode 只跑对应类型；规则条目带 tier rec/watch）
+    # 1) 规则引擎保底（V1.2.0：按勾选依据分别产出并打 driver 标记）
     rule_entries: list[dict] = []
     for c in enriched:
         if mode in ('short', 'both'):
-            s = _short_rule(c['symbol'], c['name'], c['market'], c['quote'], c['snap'])
-            if s:
-                rule_entries.append(s)
-        if mode in ('long', 'both'):
+            if tech_on:  # 📈 技术面 → 短线规则
+                s = _short_rule(c['symbol'], c['name'], c['market'], c['quote'], c['snap'])
+                if s:
+                    rule_entries.append(s)
+            if cap_on:   # 💵 资金面 → 量能/大单异动
+                cap = _capital_rule(c['symbol'], c['name'], c['market'], c['quote'], c['snap'])
+                if cap:
+                    rule_entries.append(cap)
+        if mode in ('long', 'both') and fund_on:  # 💰 基本面 → 长线估值规则
             l = _long_rule(c['symbol'], c['name'], c['market'], c['quote'], c['snap'])
             if l:
                 rule_entries.append(l)
 
-    # 2) AI 生成（失败降级规则；mode 独立）
+    # 2) AI 生成（按依据决定分析链条；失败降级规则）
     # V1.1.5 数量档位（按画像风险承受）：保守 3~5 / 稳健 5~8 / 激进 8~10
     t_min, t_max = _target_range(profile)
-    ai_entries, source = _ai_entries(enriched, mode, t_min, t_max)
+    ai_mode = 'both' if (tech_on and fund_on) else ('short' if tech_on else ('long' if fund_on else 'both'))
+    ai_entries, source = _ai_entries(enriched, ai_mode, t_min, t_max)
     if ai_entries:
         by_key = {(e['symbol'], e['rec_type']): e for e in ai_entries}
         for r in rule_entries:
@@ -731,6 +896,27 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
         merged = list(by_key.values())
     else:
         merged = rule_entries
+
+    # 2.2) V1.2.0 消息面 / 政策面驱动（资讯 → AI 主题与受益标的 → 技术校验）
+    driver_notes: list[str] = []
+    driver_entries: list[dict] = []
+    if news_on or policy_on:
+        from ..services.news_driven_service import build_driver_entries
+        if news_on:
+            r1 = build_driver_entries('news', int(q.get('news') or 3), '')
+            driver_entries += r1.get('entries') or []
+            driver_notes += r1.get('notes') or []
+        if policy_on:
+            r2 = build_driver_entries('policy', int(q.get('policy') or 2), policy_focus)
+            driver_entries += r2.get('entries') or []
+            driver_notes += r2.get('notes') or []
+        if mode != 'both':
+            want = '短线' if mode == 'short' else '长线'
+            driver_entries = [e for e in driver_entries if e.get('rec_type') == want]
+
+    # 2.4) 合并（同股同型合并依据与信源）+ 依据配额截断
+    merged = merge_entries(list(merged) + driver_entries)
+    merged = apply_quota(merged, basis, q)
 
     # 2.5) V1.1.5 数量补足：短线/长线各自按画像档位补足（不足 target 用观察级补齐）
     merged = _tier_fill_by_type(merged, target=t_min, cap=t_max)
@@ -778,6 +964,12 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
         else:
             empty_reason = f'分析了 {len(enriched)} 只候选股票，均未达到推荐标准（技术/估值评分不足），今日不生成推荐'
 
+    # V1.2.0：依据分布统计（供前端展示"短线 6 只（消息面 2 · 技术面 3 · 资金面 1）"）
+    driver_counts: dict = {}
+    for e in result['passed']:
+        for d in str(e.get('driver') or '').split(','):
+            if d:
+                driver_counts[d] = driver_counts.get(d, 0) + 1
     return {
         'ok': True,
         'date': today,
@@ -793,6 +985,10 @@ def generate_recommendations(force: bool = False, intent: str = '', mode: str = 
         'candidate_count': len(enriched),
         'pool_size': len(candidates),
         'empty_reason': empty_reason,
+        'basis': basis,
+        'quota': q,
+        'driver_counts': driver_counts,
+        'driver_notes': driver_notes,
     }
 
 
