@@ -18,19 +18,35 @@ from ...services.logger import get_app_logger
 
 logger = get_app_logger()
 
-_SECTOR_URL = 'https://push2.eastmoney.com/api/qt/clist/get'
+# 东财行情多机房（主域 + 备用域，规避单点限流）
+_SECTOR_URLS = ('https://push2.eastmoney.com/api/qt/clist/get',
+                'https://82.push2.eastmoney.com/api/qt/clist/get',
+                'https://push2delay.eastmoney.com/api/qt/clist/get')
 _ANN_URL = 'https://np-anotice-stock.eastmoney.com/api/security/ann'
 _THS_URL = 'https://news.10jqka.com.cn/tapp/news/push/stock/'
+
+
+def _fetch_first(params: dict) -> str:
+    """按备用域名顺序尝试东财行情接口（任一回包即返回）"""
+    last_err = None
+    for url in _SECTOR_URLS:
+        try:
+            text = get(url, params=params, timeout=8.0, retries=1)
+            if text and len(text) > 60:
+                return text
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+    raise last_err or RuntimeError('板块行情接口不可用')
 
 
 def fetch_sector_rank(kind: str = 'concept', limit: int = 10) -> list[dict]:
     """板块涨幅榜：kind=industry 行业 / concept 概念 → [{code,name,change_pct,leader,leader_code}]"""
     fs = 'm:90+t:2+f:!50' if kind == 'industry' else 'm:90+t:3+f:!50'
     try:
-        text = get(_SECTOR_URL, params={
+        text = _fetch_first(params={
             'pn': 1, 'pz': max(1, min(limit, 50)), 'po': 1, 'np': 1, 'fltt': 2, 'invt': 2,
             'fid': 'f3', 'fs': fs, 'fields': 'f12,f14,f3,f128,f140',
-        }, timeout=8.0)
+        })
         data = json.loads(text)
     except Exception as e:  # noqa: BLE001
         logger.warning('板块行情获取失败(%s): %s', kind, str(e)[:100])
@@ -57,10 +73,10 @@ def fetch_sector_stocks(sector_code: str, limit: int = 10) -> list[dict]:
     if not sector_code:
         return []
     try:
-        text = get(_SECTOR_URL, params={
+        text = _fetch_first(params={
             'pn': 1, 'pz': max(1, min(limit, 50)), 'po': 1, 'np': 1, 'fltt': 2, 'invt': 2,
             'fid': 'f3', 'fs': f'b:{sector_code}', 'fields': 'f12,f14,f3',
-        }, timeout=8.0)
+        })
         data = json.loads(text)
     except Exception as e:  # noqa: BLE001
         logger.warning('板块成分股获取失败(%s): %s', sector_code, str(e)[:100])
@@ -173,10 +189,13 @@ def fetch_ths_flash(limit: int = 30) -> int:
 
 def build_hot_entries(quota: int = 3) -> dict:
     """🔥 热点/板块依据：取涨幅前 3 个概念/行业板块 → 各取前若干成分股 → 生成推荐条目"""
-    sectors = fetch_sector_rank('concept', 6) + fetch_sector_rank('industry', 4)
-    sectors = [s for s in sectors if s.get('code') and s.get('change_pct', 0) > 0][:5]
-    if not sectors:
-        return {'entries': [], 'notes': ['板块行情不可用或无上涨板块（稍后重试）']}
+    # V1.3.0：优先选择「启动初期」板块（涨幅 1%~5.5%），避开涨停潮板块（其成分股多已涨停无法介入）
+    all_secs = fetch_sector_rank('concept', 20) + fetch_sector_rank('industry', 15)
+    all_secs = [s for s in all_secs if s.get('code') and s.get('change_pct', 0) > 0]
+    if not all_secs:
+        return {'entries': [], 'notes': ['板块行情不可用或今日无上涨板块（稍后重试）']}
+    early = [s for s in all_secs if 1.0 <= s['change_pct'] <= 5.5]
+    sectors = (early or all_secs)[:5]
     from ..market.data_fusion import data_fusion
     entries: list[dict] = []
     seen: set = set()
@@ -199,6 +218,9 @@ def build_hot_entries(quota: int = 3) -> dict:
             if chg > 9.5:  # 已涨停/近乎涨停，追高风险大
                 continue
             conf = 62 if sec['change_pct'] >= 3 else 58
+            # 风险分级（V1.3.0）：板块与个股涨幅温和→中风险（可被稳健型画像纳入）；
+            # 板块过热或个股短期涨幅过大→高风险
+            risk = '中' if (sec['change_pct'] < 5.0 and chg < 7.0) else '高'
             entries.append({
                 'symbol': st['symbol'], 'name': st['name'], 'market': st['market'], 'rec_type': '短线',
                 'entry_min': round(price * 0.99, 2), 'entry_max': round(price * 1.02, 2),
@@ -207,7 +229,7 @@ def build_hot_entries(quota: int = 3) -> dict:
                 'confidence': conf,
                 'logic': f"🔥 热点/板块：{sec['name']} 板块涨幅 {sec['change_pct']:.2f}%（领涨 {sec.get('leader') or '—'}），"
                          f"该股当日 {chg:+.2f}%，板块效应驱动；注意热点持续性",
-                'risk_level': '高',
+                'risk_level': risk,
                 'price': price,
                 'tier': 'rec' if conf >= 60 else 'watch',
                 'driver': 'hot',
@@ -216,6 +238,8 @@ def build_hot_entries(quota: int = 3) -> dict:
         if len(entries) >= max(1, quota):
             break
     notes = ['热点板块：' + '、'.join(f"{s['name']}({s['change_pct']:+.2f}%)" for s in sectors[:3])] if sectors else []
+    if not entries:
+        notes.append('提示：今日涨幅榜前列板块多为涨停潮，成分股已涨停无法介入，未生成热点推荐（可稍后或改看其它依据）')
     return {'entries': entries[:max(1, quota)], 'notes': notes}
 
 
