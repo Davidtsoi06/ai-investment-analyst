@@ -74,7 +74,7 @@ def _collect_news(kind: str, focus: str = '', window_days: int = 30) -> list[dic
     return out
 
 
-def _ai_themes(news_items: list[dict], kind: str, focus: str = '') -> tuple[list[dict], str]:
+def _ai_themes(news_items: list[dict], kind: str, focus: str = '', window_days: int = 30) -> tuple[list[dict], str]:
     """一次 AI 调用：主题聚类 + 受益标的推断。返回 (themes, error)"""
     from .llm_client import chat
     from ..config import settings
@@ -280,7 +280,7 @@ def build_driver_entries(kind: str, quota: int = 3, focus: str = '', window_days
         msg = (f'资讯库{scope_txt}内无政策类条目（可先抓取资讯）' if kind == 'policy'
                else f'资讯库{scope_txt}内无条目（可先到资讯看板抓取；早期模式需库中存有较早的资讯）')
         return {'entries': [], 'notes': [msg], 'error': msg}
-    themes, err = _ai_themes(news_items, kind, focus)
+    themes, err = _ai_themes(news_items, kind, focus, window_days)
     if not themes:
         # 降级：仅识别被点名公司
         entries, _ = _fallback_entries(news_items, kind, quota)
